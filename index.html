@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>시티 드라이브</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+  <canvas id="scene"></canvas>
+  <div id="loading" class="loading">지도를 불러오는 중…</div>
+
+  <div id="menu" class="menu">
+    <header class="brand">
+      <span class="kicker">PROTOTYPE 0.5</span>
+      <h1>시티 드라이브</h1>
+      <p>부산 해운대 마린시티에서 달맞이길까지. 차를 고르고 시내로 나가세요.</p>
+    </header>
+    <section class="panel">
+      <div class="group">
+        <h2>차량</h2>
+        <div id="car-list" class="car-list"></div>
+      </div>
+      <div class="row">
+        <div class="group">
+          <h2>시간</h2>
+          <div id="time-list" class="choices"></div>
+        </div>
+        <div class="group">
+          <h2>날씨</h2>
+          <div id="weather-list" class="choices"></div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="group">
+          <h2>소리</h2>
+          <div class="sliders">
+            <label>엔진 <input id="vol-engine" type="range" min="0" max="100" value="100"></label>
+            <label>빗소리 <input id="vol-rain" type="range" min="0" max="100" value="100"></label>
+            <label>음악 <input id="vol-music" type="range" min="0" max="100" value="60"></label>
+          </div>
+        </div>
+        <div class="group">
+          <h2>그래픽</h2>
+          <div id="quality-list" class="choices"></div>
+        </div>
+        <div class="group">
+          <h2>라디오</h2>
+          <div class="choices">
+            <button id="my-music">내 음악 불러오기</button>
+            <button id="credits-open">크레딧</button>
+            <input id="my-files" type="file" accept="audio/*" multiple hidden>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="group">
+          <h2>색상</h2>
+          <div id="color-list" class="swatches"></div>
+        </div>
+        <button id="start" class="start">주행 시작 <kbd>Enter</kbd></button>
+      </div>
+    </section>
+  </div>
+
+  <div id="hud" class="hud is-hidden">
+    <div class="hud-top">
+      <div class="road">
+        <span id="limit" class="limit">50</span>
+        <span id="road-name"></span>
+        <span id="sky-chip" class="sky-chip"></span>
+      </div>
+      <canvas id="minimap" width="180" height="180"></canvas>
+    </div>
+    <div class="cluster">
+      <div id="gear" class="gear">D1</div>
+      <div class="speed"><span id="speed">0</span><small>km/h</small></div>
+      <div class="rpm"><i id="rpm"></i></div>
+    </div>
+    <div class="radio">
+      <span id="radio-station"></span>
+      <span id="radio-track"></span>
+    </div>
+    <div class="help">
+      <b>W/S</b> 가속·브레이크(정지 후 S 후진) <b>A/D</b> 조향 <b>Space</b> 핸드브레이크
+      <b>C</b> 시점 <b>T</b> 시간 <b>Y</b> 날씨 <b>,</b> <b>.</b> 라디오 채널 <b>-</b> <b>=</b> 음악 음량 <b>L</b> 라이트 <b>R</b> 출발점으로 <b>M</b> 음소거 <b>Esc</b> 메뉴
+    </div>
+  </div>
+
+  <canvas id="glass" class="glass" hidden></canvas>
+  <div id="credits" class="credits is-hidden">
+    <div class="credits-box">
+      <h2>크레딧</h2>
+      <h3>음악</h3>
+      <ul id="credits-music"></ul>
+      <h3>지도</h3>
+      <p id="credits-map"></p>
+      <p class="note">"내 음악"으로 불러온 파일은 이 컴퓨터에서만 재생되며 어디로도 전송되지 않습니다.</p>
+      <button id="credits-close">닫기</button>
+    </div>
+  </div>
+  <div id="drop-hint" class="drop-hint is-hidden">음악 파일을 놓으면 "내 음악" 채널에 추가됩니다</div>
+  <div id="attribution" class="attribution"></div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

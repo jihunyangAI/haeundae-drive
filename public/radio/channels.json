@@ -1,0 +1,140 @@
+{
+ "channels": [
+  {
+   "id": "jazz",
+   "name": "재즈 라운지",
+   "freq": "89.1",
+   "tracks": [
+    {
+     "file": "jazz/lobby-time.mp3",
+     "title": "Lobby Time",
+     "artist": "Kevin MacLeod",
+     "licence": "CC BY 4.0",
+     "licenceUrl": "https://creativecommons.org/licenses/by/4.0/",
+     "source": "https://incompetech.com",
+     "seconds": 193.2
+    },
+    {
+     "file": "jazz/bossa-antigua.mp3",
+     "title": "Bossa Antigua",
+     "artist": "Kevin MacLeod",
+     "licence": "CC BY 4.0",
+     "licenceUrl": "https://creativecommons.org/licenses/by/4.0/",
+     "source": "https://incompetech.com",
+     "seconds": 283.4
+    },
+    {
+     "file": "jazz/local-forecast-elevator.mp3",
+     "title": "Local Forecast - Elevator",
+     "artist": "Kevin MacLeod",
+     "licence": "CC BY 4.0",
+     "licenceUrl": "https://creativecommons.org/licenses/by/4.0/",
+     "source": "https://incompetech.com",
+     "seconds": 189.2
+    }
+   ]
+  },
+  {
+   "id": "acoustic",
+   "name": "어쿠스틱",
+   "freq": "93.5",
+   "tracks": [
+    {
+     "file": "acoustic/carefree.mp3",
+     "title": "Carefree",
+     "artist": "Kevin MacLeod",
+     "licence": "CC BY 4.0",
+     "licenceUrl": "https://creativecommons.org/licenses/by/4.0/",
+     "source": "https://incompetech.com",
+     "seconds": 205.1
+    },
+    {
+     "file": "acoustic/easy-lemon.mp3",
+     "title": "Easy Lemon",
+     "artist": "Kevin MacLeod",
+     "licence": "CC BY 4.0",
+     "licenceUrl": "https://creativecommons.org/licenses/by/4.0/",
+     "source": "https://incompetech.com",
+     "seconds": 126.4
+    },
+    {
+     "file": "acoustic/life-of-riley.mp3",
+     "title": "Life of Riley",
+     "artist": "Kevin MacLeod",
+     "licence": "CC BY 4.0",
+     "licenceUrl": "https://creativecommons.org/licenses/by/4.0/",
+     "source": "https://incompetech.com",
+     "seconds": 235.4
+    }
+   ]
+  },
+  {
+   "id": "groove",
+   "name": "시티 그루브",
+   "freq": "97.3",
+   "tracks": [
+    {
+     "file": "groove/funkorama.mp3",
+     "title": "Funkorama",
+     "artist": "Kevin MacLeod",
+     "licence": "CC BY 4.0",
+     "licenceUrl": "https://creativecommons.org/licenses/by/4.0/",
+     "source": "https://incompetech.com",
+     "seconds": 201.5
+    },
+    {
+     "file": "groove/groove-grove.mp3",
+     "title": "Groove Grove",
+     "artist": "Kevin MacLeod",
+     "licence": "CC BY 4.0",
+     "licenceUrl": "https://creativecommons.org/licenses/by/4.0/",
+     "source": "https://incompetech.com",
+     "seconds": 205.8
+    },
+    {
+     "file": "groove/cool-vibes.mp3",
+     "title": "Cool Vibes",
+     "artist": "Kevin MacLeod",
+     "licence": "CC BY 4.0",
+     "licenceUrl": "https://creativecommons.org/licenses/by/4.0/",
+     "source": "https://incompetech.com",
+     "seconds": 218.4
+    }
+   ]
+  },
+  {
+   "id": "chill",
+   "name": "칠 로파이",
+   "freq": "101.9",
+   "tracks": [
+    {
+     "file": "chill/dreamy-flashback.mp3",
+     "title": "Dreamy Flashback",
+     "artist": "Kevin MacLeod",
+     "licence": "CC BY 4.0",
+     "licenceUrl": "https://creativecommons.org/licenses/by/4.0/",
+     "source": "https://incompetech.com",
+     "seconds": 126.6
+    },
+    {
+     "file": "chill/deep-haze.mp3",
+     "title": "Deep Haze",
+     "artist": "Kevin MacLeod",
+     "licence": "CC BY 4.0",
+     "licenceUrl": "https://creativecommons.org/licenses/by/4.0/",
+     "source": "https://incompetech.com",
+     "seconds": 122.1
+    },
+    {
+     "file": "chill/chill-wave.mp3",
+     "title": "Chill Wave",
+     "artist": "Kevin MacLeod",
+     "licence": "CC BY 4.0",
+     "licenceUrl": "https://creativecommons.org/licenses/by/4.0/",
+     "source": "https://incompetech.com",
+     "seconds": 240.1
+    }
+   ]
+  }
+ ]
+}

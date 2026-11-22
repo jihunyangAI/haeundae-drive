@@ -1,0 +1,21 @@
+{
+  "name": "city-drive",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "map:fetch": "node tools/fetch-map.mjs",
+    "map:build": "node tools/build-map.mjs",
+    "radio:build": "node tools/build-radio.mjs"
+  },
+  "dependencies": {
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "pngjs": "^7.0.0",
+    "vite": "^8.3.8"
+  }
+}
