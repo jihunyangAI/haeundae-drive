@@ -11,6 +11,7 @@ import { createAtmosphere, TIMES, WEATHERS } from './atmosphere.js';
 import { Windshield } from './windshield.js';
 import { createRoadReflection } from './reflection.js';
 import { Radio } from './radio.js';
+import { ENV } from './map/shared.js';
 
 const $ = sel => document.querySelector(sel);
 const START_STREET = '마린시티2로';
@@ -47,6 +48,7 @@ function selectCar(index) {
   const at = car ? { x: car.x, z: car.z, heading: car.heading } : spawn;
   if (car) {
     scene.remove(car.mesh);
+    car.vis.interior.dispose();
     car.mesh.traverse(o => { o.geometry?.dispose(); for (const m of [o.material].flat()) { m?.map?.dispose(); m?.dispose(); } });
   }
   const signal = car?.signal;
@@ -56,11 +58,15 @@ function selectCar(index) {
   car.reset(at.x, at.z, at.heading);
   car.y = world.surface(at.x, at.z);
   scene.add(car.mesh);
+  mirrorsLive = null;
 }
+let mirrorsLive = null;                 // whether the car's mirrors currently show the live picture
 selectCar(carIndex);
 
 // ---------- input ----------
 const keys = new Set();
+// Looking around: dragging the mouse or the right stick turns the driver's head, or swings the chase camera.
+const look = { yaw: 0, pitch: 0, drag: false, stickX: 0, stickY: 0 };
 let padBefore = [];                     // which gamepad buttons were down last frame
 function readInput() {
   const k = (...codes) => (codes.some(c => keys.has(c)) ? 1 : 0);
@@ -81,7 +87,9 @@ function readInput() {
     if (pressed(3)) car.setSignal('hazard');
     inp.horn = !!down[10];                           // press the left stick
     padBefore = down;
-  }
+    look.stickX = pad.mapping === 'standard' ? pad.axes[2] || 0 : 0;      // right stick: look around
+    look.stickY = pad.mapping === 'standard' ? pad.axes[3] || 0 : 0;
+  } else look.stickX = look.stickY = 0;
   inp.horn ||= keys.has('KeyH');
   return inp;
 }
@@ -103,9 +111,10 @@ let tunnel = false;                      // radio reception drops while the car 
 // ---------- graphics quality ----------
 // Three levels. "auto" picks one from the graphics chip and steps down if the frame rate stays low.
 const QUALITY = {
-  low: { name: '낮음', pixels: 1, shadows: 0, particles: 0.5, bloom: false, lampLights: 0, reflections: false },
-  medium: { name: '보통', pixels: 1.5, shadows: 2048, particles: 0.75, bloom: true, lampLights: 4, reflections: false },
-  high: { name: '높음', pixels: 2, shadows: 4096, particles: 1, bloom: true, lampLights: 6, reflections: true },
+  // mirrors: width of the picture the car's mirrors show, and how many frames pass between redraws
+  low: { name: '낮음', pixels: 1, shadows: 0, particles: 0.5, bloom: false, lampLights: 0, reflections: false, mirrors: null },
+  medium: { name: '보통', pixels: 1.5, shadows: 2048, particles: 0.75, bloom: true, lampLights: 4, reflections: false, mirrors: { width: 320, every: 4 } },
+  high: { name: '높음', pixels: 2, shadows: 4096, particles: 1, bloom: true, lampLights: 6, reflections: true, mirrors: { width: 640, every: 2 } },
 };
 const ORDER = ['low', 'medium', 'high'];
 function guessQuality() {
@@ -124,6 +133,7 @@ function setQuality(choice, level = choice === 'auto' ? guessQuality() : choice)
   atmosphere.setQuality(quality);
   world.setLampLights(quality.lampLights);
   if (!quality.reflections) reflection.clear();
+  mirrorsLive = null;
   resize();
   $('#quality-list').innerHTML = [['auto', `자동 (${quality.name})`], ...ORDER.map(k => [k, QUALITY[k].name])].map(([k, label]) =>
     `<button class="${k === choice ? 'on' : ''}" data-quality="${k}">${choice !== 'auto' && k === 'auto' ? '자동' : label}</button>`).join('');
@@ -141,7 +151,9 @@ function watchFrameRate(dt) {
 }
 
 const glass = new Windshield($('#glass'));
-let state = 'menu', view = 'chase', lights = false, camYaw = spawn.heading, orbit = 0.6;
+const VIEWS = ['chase', 'cockpit', 'bonnet'];
+let state = 'menu', view = 'chase', lights = false, camYaw = spawn.heading, orbit = 0.6, frames = 0;
+let hudAlways = false;                  // show the on-screen instruments in the driver's seat too
 
 // Change the weather and/or the time of day. Headlights follow what the new conditions call for.
 function setSky(choice) {
@@ -168,10 +180,42 @@ function update(dt, inp) {
 const angleDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
 const eye = new THREE.Vector3(), quat = new THREE.Quaternion();
 const faceForward = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
-const glance = new THREE.Quaternion(), UP = new THREE.Vector3(0, 1, 0);
+const glance = new THREE.Quaternion(), UP = new THREE.Vector3(0, 1, 0), RIGHT = new THREE.Vector3(1, 0, 0);
+
+// The picture in the car's mirrors: the scene behind, drawn without the car itself.
+function renderMirror() {
+  const m = car.vis.interior.mirror, shadows = renderer.shadowMap.autoUpdate, before = renderer.getRenderTarget();
+  if (m.target.width !== quality.mirrors.width) m.target.setSize(quality.mirrors.width, quality.mirrors.width / 4);
+  const wet = ENV.wet.value;
+  for (const part of car.vis.parts) part.visible = false;
+  renderer.shadowMap.autoUpdate = false;        // the shadows drawn for the main view are still good
+  ENV.wet.value = 0;                            // the road's reflection is worked out for the view ahead only
+  try {
+    renderer.setRenderTarget(m.target);
+    renderer.clear();
+    renderer.render(scene, m.camera);
+  } finally {
+    renderer.setRenderTarget(before);
+    renderer.shadowMap.autoUpdate = shadows;
+    ENV.wet.value = wet;
+    for (const part of car.vis.parts) part.visible = true;
+  }
+}
 
 function updateCamera(dt) {
   const p = car.mesh.position, speed = Math.abs(car.vf);
+  // the view returns to straight ahead when the mouse is released or the stick let go
+  if (Math.hypot(look.stickX, look.stickY) > 0.15) {
+    const k = Math.min(1, dt * 8);
+    look.yaw += (-look.stickX * (view === 'chase' ? Math.PI : 1.9) - look.yaw) * k;
+    look.pitch += (-look.stickY * 0.45 - look.pitch) * k;
+  } else if (!look.drag) {
+    look.yaw *= Math.exp(-dt * 5);
+    look.pitch *= Math.exp(-dt * 5);
+  }
+  const wide = view === 'chase' ? Math.PI : 2.3;
+  look.yaw = Math.max(-wide, Math.min(wide, look.yaw));
+  look.pitch = Math.max(view === 'chase' ? -0.2 : -0.6, Math.min(view === 'chase' ? 0.9 : 0.6, look.pitch));
   let fov = 45;
   if (state === 'menu') {
     orbit += dt * 0.2;
@@ -181,17 +225,19 @@ function updateCamera(dt) {
     if (pose?.fov) fov = pose.fov;
   } else if (view === 'chase') {
     camYaw += angleDiff(car.heading, camYaw) * (1 - Math.exp(-dt * 5));
-    const dist = 6.4 + speed * 0.035;
-    const cx = p.x - Math.sin(camYaw) * dist, cz = p.z - Math.cos(camYaw) * dist;
-    camera.position.set(cx, Math.max(p.y + 2.3 + speed * 0.01, world.ground(cx, cz) + 1.2), cz);
-    camera.lookAt(p.x + Math.sin(car.heading) * 3, p.y + 1, p.z + Math.cos(car.heading) * 3);
+    const dist = 6.4 + speed * 0.035, around = camYaw + look.yaw, ahead = 3 * Math.max(0, Math.cos(look.yaw));
+    const cx = p.x - Math.sin(around) * dist, cz = p.z - Math.cos(around) * dist;
+    camera.position.set(cx, Math.max(p.y + 2.3 + speed * 0.01 + look.pitch * 5, world.ground(cx, cz) + 1.2), cz);
+    camera.lookAt(p.x + Math.sin(car.heading) * ahead, p.y + 1, p.z + Math.cos(car.heading) * ahead);
     fov = 58 + Math.min(20, speed * 0.4);
   } else {
+    const seated = view === 'cockpit';
     car.vis.chassis.updateWorldMatrix(true, false);
-    camera.position.copy(car.vis.chassis.localToWorld(eye.copy(car.vis.eye)));
+    camera.position.copy(car.vis.chassis.localToWorld(eye.copy(seated ? car.vis.eye : car.vis.bonnet)));
     car.vis.chassis.getWorldQuaternion(quat);
-    camera.quaternion.copy(quat).multiply(faceForward).multiply(glance.setFromAxisAngle(UP, car.steer * 0.5));
-    fov = 70;
+    camera.quaternion.copy(quat).multiply(faceForward).multiply(glance.setFromAxisAngle(UP, (seated ? car.steer * 0.5 : 0) + look.yaw))
+      .multiply(glance.setFromAxisAngle(RIGHT, look.pitch));
+    fov = seated ? 70 : 62;
   }
   if (Math.abs(camera.fov - fov) > 0.01) {
     camera.fov += (fov - camera.fov) * Math.min(1, dt * 4);
@@ -303,6 +349,7 @@ function setState(next) {
   $('#menu').classList.toggle('is-hidden', next !== 'menu');
   $('#hud').classList.toggle('is-hidden', next !== 'drive');
   if (next !== 'drive') sound.horn(false);
+  look.drag = false;
   if (next === 'drive') {
     camYaw = car.heading;
     sound.start();
@@ -340,7 +387,8 @@ addEventListener('keydown', e => {
     return;
   }
   keys.add(e.code);
-  if (e.code === 'KeyC') view = view === 'chase' ? 'cockpit' : 'chase';
+  if (e.code === 'KeyC') { view = VIEWS[(VIEWS.indexOf(view) + 1) % VIEWS.length]; look.yaw = look.pitch = 0; }
+  else if (e.code === 'KeyU') hudAlways = !hudAlways;
   else if (e.code === 'KeyL') lights = !lights;
   else if (e.code === 'KeyQ') car.setSignal('left');
   else if (e.code === 'KeyE') car.setSignal('right');
@@ -358,7 +406,15 @@ addEventListener('keydown', e => {
   else if (e.code === 'Escape') setState('menu');
 });
 addEventListener('keyup', e => keys.delete(e.code));
-addEventListener('blur', () => { keys.clear(); sound.horn(false); });
+addEventListener('mousedown', e => { if (state === 'drive' && e.button === 0 && !e.target.closest?.('button, a, input, .credits')) look.drag = true; });
+addEventListener('mouseup', () => { look.drag = false; });
+addEventListener('mousemove', e => {
+  if (!(e.buttons & 1)) look.drag = false;      // the button was let go somewhere the page could not see
+  if (!look.drag) return;
+  look.yaw -= e.movementX * 0.004;
+  look.pitch -= e.movementY * 0.003;
+});
+addEventListener('blur', () => { keys.clear(); sound.horn(false); look.drag = false; });
 document.addEventListener('visibilitychange', () => { if (document.hidden) sound.horn(false); });
 
 // ---------- loop ----------
@@ -398,6 +454,22 @@ renderer.setAnimationLoop(now => {
     top: Math.max(0, top), bottom: Math.min(1, bottom),
   });
   if (state === 'drive') updateHud(dt);
+  $('#hud').classList.toggle('in-car', inside && !hudAlways);
+  const mirrors = inside && !!quality.mirrors;
+  if (mirrors !== mirrorsLive) { car.vis.interior.setMirrors(mirrorsLive = mirrors); frames = 0; }
+  {
+    const time = new Date();
+    car.vis.interior.update({
+      inside,
+      kmh: Math.round(Math.abs(car.vf) * 3.6), rpm: car.rpm, gear: car.reverse ? 'R' : `D${car.gear + 1}`,
+      clock: `${time.getHours()}:${String(time.getMinutes()).padStart(2, '0')}`,
+      blinkLeft: car.blinkOn && car.signal !== 'right', blinkRight: car.blinkOn && car.signal !== 'left', signal: car.signal,
+      lights, wiping: falling > 0.05, dark: atmosphere.glow, sky: $('#sky-chip').textContent,
+      station: $('#radio-station').textContent, track: $('#radio-track').textContent,
+      road: hud.road.textContent, limit: hud.limit.textContent, minimap: $('#minimap'),
+    });
+    if (mirrors && frames++ % quality.mirrors.every === 0) renderMirror();
+  }
   sound.update(car.rpm, car.throttle, Math.abs(car.vf), state === 'drive');
   sound.setRain(state === 'drive' ? atmosphere.rain : atmosphere.rain * 0.4, inside);
   radio.update(inside, tunnel ? 0.15 : 1, true);

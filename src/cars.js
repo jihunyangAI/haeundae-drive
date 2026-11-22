@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { buildShell } from './carbody.js';
+import { buildInterior } from './interior.js';
 import { ENV } from './map/shared.js';
 
 // Dimensions in metres, mass in kg. All four are made-up cars.
@@ -39,6 +40,7 @@ export const CARS = [
       front: { grille: { x: [0, 0.34], y: [0.6, 0.76] } },
       rear: { tail: { x: [0.55, 0.97], y: [0.6, 0.84], yOut: [0.6, 0.9] }, reverse: { x: [0.55, 0.68], y: [0.52, 0.57] }, blink: { x: [0.7, 0.95], y: [0.52, 0.57] }, plate: 0.46 },
     },
+    cabin: { upper: 0x30343a, lower: 0x34383e, seat: 0x3b4048, accent: 0x9aa1a9, dial: '#6fd0ff', top: 200 },
     wheel: { width: 0.2, spokes: 5, thick: 0.075, rim: 0xc3c7cc }, exhaust: [-0.5], plateText: '27나 4815',
   },
   {
@@ -54,6 +56,7 @@ export const CARS = [
       glass: { front: [0.3, 0.98], rear: [-1.6, -0.97], side: [-1.38, 0.9] }, pillars: [-0.35], doors: [0.88, -0.35, -0.95],
       front: {}, rear: {},
     },
+    cabin: { upper: 0x2c2f34, lower: 0x4a4238, seat: 0x6e5f4c, accent: 0xb89b6a, dial: '#ffffff', top: 240 },
     wheel: { width: 0.22, spokes: 10, thick: 0.04, rim: 0xb9bec4 }, exhaust: [-0.55, 0.55], plateText: '153가 2046',
   },
   {
@@ -73,6 +76,7 @@ export const CARS = [
       },
       rear: { tail: { x: [0, 0.95], y: [0.7, 0.78], bar: true }, blink: { x: [0.7, 0.95], y: [0.6, 0.65] }, reverse: { x: [0.5, 0.64], y: [0.6, 0.65] }, intake: { x: [0, 0.5], y: [0.08, 0.2] }, plate: 0.44 },
     },
+    cabin: { upper: 0x232528, lower: 0x1e1f22, seat: 0x262223, accent: 0xc8102e, dial: '#ff4d3d', top: 300, sport: true },
     wheel: { width: 0.26, spokes: 5, twin: true, thick: 0.035, rim: 0x2b2e33, caliper: 0xc8102e }, exhaust: [-0.42, -0.3, 0.3, 0.42], plateText: '08라 7193',
   },
   {
@@ -93,6 +97,7 @@ export const CARS = [
       },
       rear: { tail: { x: [0.6, 0.97], y: [0.56, 0.86], yOut: [0.56, 0.92] }, reverse: { x: [0.6, 0.72], y: [0.48, 0.53] }, blink: { x: [0.74, 0.95], y: [0.48, 0.53] }, plate: 0.5 },
     },
+    cabin: { upper: 0x33302c, lower: 0x3f3830, seat: 0x4f3d2e, accent: 0x8b9096, dial: '#ffb547', top: 220 },
     wheel: { width: 0.25, spokes: 6, thick: 0.085, rim: 0x8b9096 }, exhaust: [], plateText: '342다 5860',
   },
 ];
@@ -171,8 +176,7 @@ export function buildCarMesh(spec, colour) {
   const std = options => new THREE.MeshStandardMaterial(options);
   const glass = std({ color: 0x0c1218, metalness: 0.6, roughness: 0.06, transparent: true, opacity: 0.62 });
   const dark = std({ color: 0x131518, roughness: 0.85 });
-  const cabin = std({ color: 0x1b1d21, roughness: 0.9 });
-  const lining = std({ color: 0x24262b, roughness: 0.95, side: THREE.BackSide });
+  const lining = std({ color: spec.cabin.upper, roughness: 0.95, side: THREE.BackSide });
   const tyreMat = std({ color: 0x0e0f11, roughness: 0.92 });
   const rimMat = std({ color: spec.wheel.rim, metalness: 0.85, roughness: 0.32 });
   const discMat = std({ color: 0x55585d, metalness: 0.8, roughness: 0.45 });
@@ -244,12 +248,12 @@ export function buildCarMesh(spec, colour) {
       add(new THREE.BoxGeometry(0.02, 0.026, 0.15), chrome, side * (m.hw - 0.012), m.belt - 0.085, z + 0.13);
     }
   });
-  const mz = cowl - 0.2, mAt = shell.at(mz), mirrorGlass = std({ color: 0x9fb2c2, metalness: 1, roughness: 0.08 });
+  const mz = cowl - 0.2, mAt = shell.at(mz), mirrorPanes = [];       // the glass of the door mirrors, left then right
   for (const side of [1, -1]) {
     const mx = side * (mAt.beltX + 0.1);
     add(new THREE.SphereGeometry(1, 14, 10).scale(0.105, 0.07, 0.055), paint, mx, mAt.belt + 0.075, mz);
     add(new THREE.BoxGeometry(0.1, 0.022, 0.05), dark, side * (mAt.beltX + 0.03), mAt.belt + 0.03, mz);
-    add(new THREE.PlaneGeometry(0.17, 0.1).rotateY(Math.PI), mirrorGlass, mx, mAt.belt + 0.075, mz - 0.04, body, false);
+    mirrorPanes.push(add(new THREE.PlaneGeometry(0.17, 0.1).rotateY(Math.PI), dark, mx, mAt.belt + 0.075, mz - 0.04, body, false));
   }
   // wipers, aerial, roof rails
   for (const x of [0.32, -0.22]) add(new THREE.BoxGeometry(0.5, 0.012, 0.022), dark, x, shell.top(cowl - 0.05) + 0.012, cowl - 0.05, body, false);
@@ -260,36 +264,22 @@ export function buildCarMesh(spec, colour) {
     for (const side of [1, -1]) add(new THREE.BoxGeometry(0.035, 0.035, r1 - r0), chrome, side * (m.roofX - 0.04), m.roofY + 0.035, (r0 + r1) / 2);
   }
 
-  // ---- underbody and a plain cabin: floor, dashboard, seats, steering wheel
-  const eyeZ = header - 0.38, cab = shell.at(eyeZ), eyeY = cab.belt + 0.27, seatY = eyeY - 0.72, cabW = (cab.beltX - 0.06) * 2;
+  // ---- underbody and cabin
   add(new THREE.BoxGeometry(W - 0.5, 0.42, spec.L - 0.6), dark, 0, gc + 0.23, 0);
-  const rearSeatZ = Math.max(s.glass.side[0] + 0.35, eyeZ - 0.85);
-  add(new THREE.BoxGeometry(cabW, 0.04, cowl - rearSeatZ + 0.5), cabin, 0, seatY - 0.2, (cowl + rearSeatZ - 0.5) / 2);
-  add(new THREE.BoxGeometry(cabW, 0.2, cowl - eyeZ - 0.6), cabin, 0, cab.belt - 0.07, (cowl + eyeZ + 0.6) / 2);
-  const seat = (x, z, width) => {
-    add(new THREE.BoxGeometry(width, 0.14, 0.5), cabin, x, seatY, z + 0.12);
-    add(new THREE.BoxGeometry(width, 0.62, 0.13), cabin, x, seatY + 0.34, z - 0.2).rotation.x = -0.22;
-    for (const hx of width > 1 ? [-0.36, 0.36] : [0]) add(new THREE.BoxGeometry(0.24, 0.17, 0.1), cabin, x + hx, seatY + 0.72, z - 0.28);
-  };
-  seat(0.36, eyeZ, 0.48);
-  seat(-0.36, eyeZ, 0.48);
-  if (rearSeatZ < eyeZ - 0.6) seat(0, rearSeatZ, cabW - 0.1);
-  const column = new THREE.Group();
-  column.position.set(0.36, cab.belt - 0.04, eyeZ + 0.5);
-  column.rotation.x = -0.35;
-  body.add(column);
-  const steeringWheel = new THREE.Group();
-  column.add(steeringWheel);
-  add(new THREE.TorusGeometry(0.17, 0.018, 8, 24), dark, 0, 0, 0, steeringWheel);
-  add(new THREE.BoxGeometry(0.33, 0.03, 0.02), dark, 0, 0, 0, steeringWheel);
+  const interior = buildInterior(spec, shell, body, mirrorPanes, lining);
+  const { eyeY, eyeZ, steeringWheel } = interior;
 
   // ---- headlamp beams
+  // The lamps hang on their own frame, so the car can be hidden (see renderMirror) without changing the lights in the scene.
+  const rig = new THREE.Group();
+  rig.position.z = centerZ;
+  root.add(rig);
   const lampAt = shell.onCap('nose', 0.72 * W / 2, shell.caps.nose.base[0][1] + 0.3), spots = [];
   for (const side of [-1, 1]) {
     const spot = new THREE.SpotLight(0xfff1d6, 0, 110, 0.55, 0.7, 1.6);
     spot.position.set(side * lampAt[0], lampAt[1], lampAt[2] - 0.1);
     spot.target.position.set(side * lampAt[0] * 0.5, -0.5, hl + 30);
-    body.add(spot, spot.target);
+    rig.add(spot, spot.target);
     spots.push(spot);
   }
   // The light the headlamps throw on the road: a glowing patch laid on the ground ahead. The spot
@@ -351,5 +341,6 @@ export function buildCarMesh(spec, colour) {
   const eye = new THREE.Vector3(0.36, eyeY, centerZ + eyeZ);
   // top and bottom edge of the windscreen in front of the driver, in chassis space
   const screen = [new THREE.Vector3(0.36, shell.top(header), centerZ + header), new THREE.Vector3(0.36, shell.at(cowl).belt + 0.05, centerZ + cowl)];
-  return { root, chassis, wheels, paint, lamps, beamMat, beam, spots, steeringWheel, eye, screen, centerZ, setColour };
+  const bonnet = new THREE.Vector3(0, shell.top(cowl) + 0.3, centerZ + cowl - 0.1);      // where the bonnet camera sits
+  return { root, chassis, wheels, paint, lamps, beamMat, beam, spots, steeringWheel, eye, bonnet, screen, centerZ, setColour, interior, parts: [chassis, beam, ...wheels.map(w => w.pivot)] };
 }
