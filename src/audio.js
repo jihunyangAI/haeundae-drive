@@ -85,6 +85,27 @@ export class EngineSound {
     this.hornGain.gain.setTargetAtTime(on ? 0.22 * this.volumes.engine : 0, this.ctx.currentTime, 0.012);
   }
 
+  // Another driver's horn, somewhere near: a short double note. volume 0..1.
+  honk(volume) {
+    if (!this.ctx || volume <= 0.01) return;
+    const t = this.ctx.currentTime, g = this.ctx.createGain(), tone = this.ctx.createBiquadFilter();
+    tone.type = 'lowpass';
+    tone.frequency.value = 1800;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.16 * volume * this.volumes.engine, t + 0.02);
+    g.gain.setValueAtTime(0.16 * volume * this.volumes.engine, t + 0.42);
+    g.gain.linearRampToValueAtTime(0, t + 0.5);
+    for (const f of [440, 554]) {
+      const o = this.ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = f;
+      o.connect(tone);
+      o.start(t);
+      o.stop(t + 0.55);
+    }
+    tone.connect(g).connect(this.master);
+  }
+
   // The click of the turn signal relay; `high` for the on half of the blink.
   tick(high) {
     if (!this.ctx) return;

@@ -10,7 +10,7 @@ import { ENV } from './map/shared.js';
 // `glass` gives the z range of each window, `pillars` and `doors` where the side is divided, and
 // `nose` / `tail` how the ends are rounded off: depth d, and how square they are in plan (nx) and in
 // side view (ny). Lamp and grille patches use fractions: x of the half width, y of the end's height.
-const FRONT = {
+export const FRONT = {
   head: { x: [0.5, 0.97], y: [0.62, 0.8], yOut: [0.66, 0.9] },
   drl: { x: [0.5, 0.95], y: [0.55, 0.59], yOut: [0.59, 0.63] },
   blink: { x: [0.72, 0.95], y: [0.44, 0.5], yOut: [0.47, 0.53] },
@@ -18,7 +18,7 @@ const FRONT = {
   intake: { x: [0, 0.62], y: [0.07, 0.25] },
   plate: 0.4,
 };
-const REAR = {
+export const REAR = {
   tail: { x: [0.45, 0.97], y: [0.64, 0.8], yOut: [0.62, 0.86] },
   blink: { x: [0.64, 0.95], y: [0.56, 0.61], yOut: [0.54, 0.59] },
   reverse: { x: [0.45, 0.6], y: [0.56, 0.61] },

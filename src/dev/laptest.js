@@ -94,6 +94,7 @@ export function runLap(game, { trip = false, limitSeconds = 1500 } = {}) {
     if (name) streets.add(name);
   }
   const report = { lapKm: +(total / 1000).toFixed(2), streets: [...streets], cars: {} };
+  game.setTraffic('none');          // the automatic driver knows nothing of other cars
   game.setState('drive');
 
   for (let index = 0; index < 4; index++) {

@@ -28,7 +28,7 @@ export function laneSplit(road) {
 // index 0 is the lane nearest the centre line (or the leftmost lane of a one-way street).
 export function laneOffset(road, dir, index) {
   const [, back] = laneSplit(road), laneW = (road.w - 1) / road.ln;
-  if (!road.ow && road.ln === 1) return dir * Math.min(0.9, road.w / 2 - 1.1);
+  if (!road.ow && road.ln === 1) return dir * Math.min(1, road.w / 2 - 1);
   return (back + dir * (index + 0.5) - road.ln / 2) * laneW;
 }
 
@@ -43,6 +43,21 @@ function offsetLine(p, o) {            // p: flat [x, z, ...]; returns [[x, z], 
 }
 const lengthOf = pts => pts.reduce((s, p, i) => (i ? s + Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) : 0), 0);
 const unit = (a, b) => { const dx = b[0] - a[0], dz = b[1] - a[1], l = Math.hypot(dx, dz) || 1; return [dx / l, dz / l]; };
+// Do two paths come closer than `room` metres anywhere - so that cars on them could touch?
+function tooClose(a, b, room) {
+  if (crosses(a, b)) return true;
+  const near = (p, q) => {
+    for (const [px, pz] of p) {
+      for (let j = 1; j < q.length; j++) {
+        const [x1, z1] = q[j - 1], dx = q[j][0] - x1, dz = q[j][1] - z1, len2 = dx * dx + dz * dz || 1;
+        const t = Math.max(0, Math.min(1, ((px - x1) * dx + (pz - z1) * dz) / len2));
+        if (Math.hypot(px - x1 - dx * t, pz - z1 - dz * t) < room) return true;
+      }
+    }
+    return false;
+  };
+  return near(a, b) || near(b, a);
+}
 function crosses(a, b) {               // do two polylines cross?
   for (let i = 1; i < a.length; i++) {
     for (let j = 1; j < b.length; j++) {
@@ -85,10 +100,57 @@ export function buildLaneGraph(map, net) {
     }
   }
 
+  // Streets that leave a point at a narrow angle run side by side for a while; their lanes start only
+  // where the two carriageways have come apart.
+  const trim = l => { l.s0 = l.sa + l.pads[0]; l.s1 = l.sb - l.pads[1]; l.internal = l.s1 - l.s0 < MIN_STRETCH; };
+  const outward = ({ link, end }) => {
+    const here = link.st.at(end ? link.sb : link.sa), on = link.st.at(end ? link.sb - 8 : link.sa + 8), dx = on.x - here.x, dz = on.z - here.z, len = Math.hypot(dx, dz) || 1;
+    return [dx / len, dz / len];
+  };
+  for (const node of nodes.values()) {
+    if (node.ends.length < 2) continue;
+    const dirs = node.ends.map(outward);
+    if (node.ends.length === 2) {
+      // one street running on into another round a corner: the lanes stop short of the corner and a bend joins them
+      const [a, b] = node.ends;
+      if (dirs[0][0] * dirs[1][0] + dirs[0][1] * dirs[1][1] > -0.86) {
+        a.link.pads[a.end] = Math.max(a.link.pads[a.end], b.link.road.w / 2 + 1);
+        b.link.pads[b.end] = Math.max(b.link.pads[b.end], a.link.road.w / 2 + 1);
+      }
+      continue;
+    }
+    node.ends.forEach((e, i) => {
+      node.ends.forEach((o, k) => {
+        const angle = Math.acos(Math.max(-1, Math.min(1, dirs[i][0] * dirs[k][0] + dirs[i][1] * dirs[k][1])));
+        if (k !== i && angle < 1.3) e.link.pads[e.end] = Math.max(e.link.pads[e.end], Math.min(45, (e.link.road.w + o.link.road.w) / 4 / Math.sin(Math.max(angle, 0.1) / 2) + 1));
+      });
+    });
+  }
+  links.forEach(trim);
+
   // ---- junctions: nodes joined by stretches too short to drive on count as one
   const find = n => { while (n.parent) n = n.parent; return n; };
-  const join = () => { for (const l of links) if (l.internal && !l.short) { const a = find(l.a), b = find(l.b); if (a !== b) a.parent = b; } };
+  const join = () => { for (const n of nodes.values()) n.parent = null; for (const l of links) if (l.internal && !l.short) { const a = find(l.a), b = find(l.b); if (a !== b) a.parent = b; } };
   join();
+  // A street that simply ends at such a group of points ends at the junction too: its lanes stop short like the others'.
+  {
+    const arms = new Map(), pad = new Map();
+    for (const l of links) {
+      for (const [end, n] of [l.a, l.b].entries()) {
+        const root = find(n);
+        if (!l.internal) arms.set(root, (arms.get(root) || 0) + 1);
+        pad.set(root, Math.max(pad.get(root) || 0, l.pads[end]));
+      }
+    }
+    for (const l of links) {
+      for (const [end, n] of [l.a, l.b].entries()) {
+        const root = find(n);
+        if (l.pads[end] === 0 && arms.get(root) >= 3) { l.pads[end] = pad.get(root) || 5; l.clear[end] = 3.5; }
+      }
+      trim(l);
+    }
+    join();
+  }
   // Where many streets meet in a tangle the result would be one junction with a dozen arms. There the
   // short stretches are kept as (short) lanes instead, each meeting point a small junction of its own,
   // without signals or paint.
@@ -101,7 +163,6 @@ export function buildLaneGraph(map, net) {
     Object.assign(l, { short: true, s0: l.sa + inset, s1: l.sb - inset });
   }
   const knotted = new Set([...nodes.values()].filter(n => knots.has(find(n))));
-  for (const n of nodes.values()) n.parent = null;
   join();
   const byRoot = new Map(), junctions = [];
   for (const node of nodes.values()) {
@@ -191,7 +252,7 @@ export function buildLaneGraph(map, net) {
       }).filter(e => e.turn !== 'U').sort((a, b) => b.angle - a.angle);
       arm.turns = exits.map(e => e.turn);
       if (!exits.length) {                                  // dead end: turn round, if the street is two-way
-        arm.exits.forEach((to, i) => { if (i === 0) for (const from of arm.entries.slice(0, 1)) connect(j, arm, from, to, 'U'); });
+        if (arm.exits.length) for (const from of arm.entries) connect(j, arm, from, arm.exits[0], 'U');
         continue;
       }
       // Share the lanes out among the exits in order, straight on counting double: the left lane turns
@@ -215,7 +276,7 @@ export function buildLaneGraph(map, net) {
       for (let b = a + 1; b < j.moves.length; b++) {
         const m = j.moves[a], o = j.moves[b];
         if (m.from === o.from || m.arm === o.arm && m.to !== o.to) continue;
-        if (m.to === o.to || crosses(m.pts, o.pts)) { m.conflicts.push(o); o.conflicts.push(m); }
+        if (m.to === o.to || tooClose(m.pts, o.pts, 1.5)) { m.conflicts.push(o); o.conflicts.push(m); }
       }
     }
   }

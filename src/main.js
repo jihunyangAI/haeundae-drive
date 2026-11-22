@@ -12,6 +12,8 @@ import { Windshield } from './windshield.js';
 import { createRoadReflection } from './reflection.js';
 import { Radio } from './radio.js';
 import { ENV } from './map/shared.js';
+import { createTraffic } from './traffic.js';
+import { createTrafficView } from './trafficview.js';
 
 const $ = sel => document.querySelector(sel);
 const START_STREET = '마린시티2로';
@@ -39,6 +41,29 @@ composer.addPass(new RenderPass(scene, camera));
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
 $('#attribution').textContent = world.map.meta.attribution;
+
+// ---------- traffic ----------
+const traffic = createTraffic(world.lanes, { signalOf: world.signalAt });
+const trafficView = createTrafficView(world.trafficKit, scene, world.ground);
+const TRAFFIC = [['none', '없음', 0], ['light', '적음', 0.5], ['normal', '보통', 1]];
+let trafficLevel = 'normal', trafficFilled = false;
+const frustum = new THREE.Frustum(), viewMatrix = new THREE.Matrix4(), probe = new THREE.Sphere(new THREE.Vector3(), 7);
+// cars appear and disappear where the camera is not looking
+const outOfSight = (x, z) => !frustum.intersectsSphere(probe.set(probe.center.set(x, world.ground(x, z) + 1, z), 7));
+function updateTraffic(dt) {
+  const busy = { night: 0.45, dawn: 0.5 }[atmosphere.time.id] ?? 1;       // fewer cars about at night
+  const want = Math.round(quality.traffic * TRAFFIC.find(t => t[0] === trafficLevel)[2] * busy);
+  if (!want && !traffic.cars.length) { trafficView.sync([], { lights: false, time: 0 }); return; }
+  frustum.setFromProjectionMatrix(viewMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+  const player = { x: car.x, z: car.z, vx: car.vx, vz: car.vz };
+  // the streets start out populated: the first cars may appear closer than later ones
+  traffic.step(Math.min(dt, 0.1), { focus: car, want, player, hidden: outOfSight, near: trafficFilled ? 90 : 35 });
+  if (traffic.cars.length >= want * 0.8) trafficFilled = true;
+  for (const e of traffic.events.splice(0)) if (e.type === 'honk') sound.honk(Math.max(0, 1 - Math.hypot(e.x - car.x, e.z - car.z) / 60));
+  trafficView.sync(traffic.cars, { lights: atmosphere.wantsLights, time: traffic.time });
+}
+// everything the player's car can run into: the fixed world and the other cars
+const solids = { query(x, z, r, cb) { world.query(x, z, r, cb); traffic.query(x, z, r, cb); } };
 
 // ---------- car ----------
 const spawn = world.spawnOn(START_STREET);
@@ -112,9 +137,9 @@ let tunnel = false;                      // radio reception drops while the car 
 // Three levels. "auto" picks one from the graphics chip and steps down if the frame rate stays low.
 const QUALITY = {
   // mirrors: width of the picture the car's mirrors show, and how many frames pass between redraws
-  low: { name: '낮음', pixels: 1, shadows: 0, particles: 0.5, bloom: false, lampLights: 0, reflections: false, mirrors: null },
-  medium: { name: '보통', pixels: 1.5, shadows: 2048, particles: 0.75, bloom: true, lampLights: 4, reflections: false, mirrors: { width: 320, every: 4 } },
-  high: { name: '높음', pixels: 2, shadows: 4096, particles: 1, bloom: true, lampLights: 6, reflections: true, mirrors: { width: 640, every: 2 } },
+  low: { name: '낮음', pixels: 1, shadows: 0, particles: 0.5, bloom: false, lampLights: 0, reflections: false, mirrors: null, traffic: 8 },
+  medium: { name: '보통', pixels: 1.5, shadows: 2048, particles: 0.75, bloom: true, lampLights: 4, reflections: false, mirrors: { width: 320, every: 4 }, traffic: 20 },
+  high: { name: '높음', pixels: 2, shadows: 4096, particles: 1, bloom: true, lampLights: 6, reflections: true, mirrors: { width: 640, every: 2 }, traffic: 40 },
 };
 const ORDER = ['low', 'medium', 'high'];
 function guessQuality() {
@@ -173,7 +198,7 @@ function update(dt, inp) {
   sound.horn(!!inp.horn);
   const n = Math.max(1, Math.ceil(dt * 240));
   for (let i = 0; i < n; i++) car.step(dt / n, atmosphere.grip);
-  car.collide(world);
+  car.collide(solids);
   car.y = world.surface(car.x, car.z);
 }
 
@@ -328,9 +353,12 @@ function renderMenu() {
     `<button class="${o === current ? 'on' : ''}" data-${key}="${o.id}">${o.name}</button>`).join('');
   $('#time-list').innerHTML = choices(TIMES, atmosphere.time, 'time');
   $('#weather-list').innerHTML = choices(WEATHERS, atmosphere.weather, 'weather');
+  $('#traffic-list').innerHTML = TRAFFIC.map(([id, name]) => `<button class="${id === trafficLevel ? 'on' : ''}" data-traffic="${id}">${name}</button>`).join('');
 }
 $('#time-list').addEventListener('click', e => e.target.dataset.time && setSky({ time: e.target.dataset.time }));
 $('#weather-list').addEventListener('click', e => e.target.dataset.weather && setSky({ weather: e.target.dataset.weather }));
+const setTraffic = level => { trafficLevel = level; if (level === 'none') traffic.clear(); trafficFilled = false; renderMenu(); };
+$('#traffic-list').addEventListener('click', e => e.target.dataset.traffic && setTraffic(e.target.dataset.traffic));
 $('#car-list').addEventListener('click', e => {
   const card = e.target.closest('[data-car]');
   if (!card) return;
@@ -442,6 +470,7 @@ renderer.setAnimationLoop(now => {
   car.sync(dt, lights, atmosphere.glow, atmosphere.wet);
   if (car.blinkOn !== blinking && state === 'drive') sound.tick(car.blinkOn);
   world.update(now / 1000);
+  updateTraffic(dt);
   world.stream(car.x, car.z);
   camBefore.copy(camera.position);
   updateCamera(dt);
@@ -486,6 +515,7 @@ window.__game = {
   world, scene, camera, renderer, setState, setQuality, get quality() { return `${qualityChoice}:${qualityLevel}`; }, selectCar, setSky, atmosphere, radio, sound,
   get car() { return car; },
   setView(next) { view = next; },
+  traffic, trafficView, setTraffic,
   simulate(seconds, input, dt = 1 / 60) {
     for (let t = 0; t < seconds; t += dt) update(dt, input(t, car));
   },

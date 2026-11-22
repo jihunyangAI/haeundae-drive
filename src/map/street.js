@@ -80,7 +80,8 @@ function pointBack(pts, back) {
 // road of that kind ('drive' or 'any') lies within `margin` metres of its edge.
 // zone: { owns, streets, outlines, areas, lines, seed, x0, z0, x1, z1 }.
 // Streets are worked out whole and each zone keeps what falls inside it, so zones agree at their edges.
-// Returns { group, posts, lamps, decals, signals } - posts are the solid poles and trunks; signals are
+// Returns { group, posts, lamps, decals, signals, parked } - posts are the solid poles and trunks; parked
+// are the cars standing beside the access roads, { x, z, heading, kind, tint }; signals are
 // the lamps of the signal heads, { mesh, i, arm, role }, for the world to switch on and off.
 export function buildStreets(ctx, zone) {
   const { map, ground, atlas, kit, nearRoad } = ctx, { owns } = zone, rand = seeded(7 + zone.seed);
@@ -159,7 +160,8 @@ export function buildStreets(ctx, zone) {
   function signal(f, half, armLen, ahead, arm) {
     const heading = Math.atan2(f.ux, f.uz);
     const base = beside(f, half + 0.9, ahead), y = base.y;
-    if (!owns(base.x, base.z) || blocked(base, f.road) || inBuilding(base.x, base.z)) return;
+    // across a bent or wide junction the spot straight ahead can land on a carriageway - even the street's own
+    if (!owns(base.x, base.z) || blocked(base) || inBuilding(base.x, base.z)) return;
     put('pole', base.x, y + 3.2, base.z, 0, 0.1, 6.4, 0.1);
     posts.push({ x: base.x, z: base.z, r: 0.2 });
     const boom = beside(f, half + 0.9 - armLen / 2, ahead), head = beside(f, half + 0.9 - armLen + 0.9, ahead);
@@ -299,6 +301,29 @@ export function buildStreets(ctx, zone) {
     }
   }
 
+  // ---------- parked cars ----------
+  // Beside the access roads and car park aisles, clear of buildings and of every other carriageway.
+  const parked = [], PARKED = ['sedan', 'hatch', 'suv', 'sedan', 'hatch', 'suv', 'van'];
+  for (const road of zone.roads) {
+    if (road.c !== 'drive' || road.k !== 'service' || road.br || road.tn || road.len < 14) continue;
+    const p = road.p;
+    let carry = 5;                                         // distance to the next parking space
+    for (let i = 2; i < p.length && parked.length < 14; i += 2) {
+      const ax = p[i - 2], az = p[i - 1], dx = p[i] - ax, dz = p[i + 1] - az, len = Math.hypot(dx, dz) || 1, ux = dx / len, uz = dz / len;
+      for (; carry < len; carry += 6.3) {
+        for (const side of [1, -1]) {
+          if (rand() > 0.3 || parked.length >= 14) continue;
+          const at = beside({ x: ax + ux * carry, z: az + uz * carry, ux, uz }, side * (road.w / 2 + 1.25));
+          const ends = [-1.9, 0, 1.9].map(d => [at.x + ux * d, at.z + uz * d]);
+          if (!owns(at.x, at.z) || ends.some(([x, z]) => !map.isLand(x, z) || inBuilding(x, z) || nearRoad(x, z, 1.2, 'drive', road))) continue;
+          parked.push({ x: at.x, z: at.z, heading: Math.atan2(ux, uz) + (rand() < 0.5 ? Math.PI : 0), kind: PARKED[Math.floor(rand() * PARKED.length)], tint: rand() });
+          for (const [x, z] of ends) posts.push({ x, z, r: 0.95 });
+        }
+      }
+      carry -= len;
+    }
+  }
+
   // ---------- trees away from the streets ----------
   for (const row of zone.lines.filter(l => l.k === 'tree_row')) {
     for (let i = 2; i < row.p.length; i += 2) {
@@ -361,5 +386,5 @@ export function buildStreets(ctx, zone) {
     group.add(poolMesh, haloMesh);
     decals.push(poolMesh);
   }
-  return { group, posts, lamps, decals, signals };
+  return { group, posts, lamps, decals, signals, parked };
 }

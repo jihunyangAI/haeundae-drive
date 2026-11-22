@@ -4,9 +4,7 @@ import * as THREE from 'three';
 // each end by a rounded cap. Lengths in metres; z runs along the car from the middle of the body,
 // positive towards the nose, x is positive to the left, y is height above the road.
 
-const SUB = 3;                     // surface rows between two control points of a cross-section
 const SPANS = 9;                   // control points per half section, minus one
-const HALF = SPANS * SUB;          // rows from the bottom centre line up to the roof centre line
 const SIDE_GLASS = 6, TOP_GLASS = 8;   // the spans that hold the side windows and the windscreen
 export const PAINT = 0, GLASS = 1, TRIM = 2;
 
@@ -32,7 +30,13 @@ export function curve(points) {
 }
 
 // spec: the car (see cars.js). arches: [{ z, y, r }] wheel openings.
-export function buildShell(spec, arches) {
+// detail: how finely the surface is divided - coarser for the cars of the traffic and coarser still for
+// parked cars. step: metres between cross-sections; arch: cross-sections round each wheel opening;
+// sub: rows between two control points of a cross-section; cap: rings in each end cap; patch: [across, up]
+// divisions of a lamp patch.
+export const FINE = { step: 0.07, arch: 12, sub: 3, cap: 10, patch: [14, 4] };
+export function buildShell(spec, arches, detail = FINE) {
+  const SUB = detail.sub, HALF = SPANS * SUB;      // HALF: rows from the bottom centre line up to the roof centre line
   const s = spec.shape, hl = spec.L / 2, W = spec.W;
   const top = curve(s.top), belt = curve(s.belt);
   const zF = hl - s.nose.d, zR = -hl + s.tail.d;        // where the caps start
@@ -64,9 +68,9 @@ export function buildShell(spec, arches) {
 
   // ---- stations along the body: evenly spaced, plus the places where something starts or ends
   const marks = [zR, zF, ...s.glass.front, ...s.glass.rear, ...s.glass.side, ...s.pillars.flatMap(z => [z - 0.04, z + 0.04])];
-  for (const a of arches) for (let k = 0; k <= 12; k++) marks.push(a.z + a.r * Math.cos(k * Math.PI / 12));
+  for (const a of arches) for (let k = 0; k <= detail.arch; k++) marks.push(a.z + a.r * Math.cos(k * Math.PI / detail.arch));
   let stations = marks.filter(z => z >= zR && z <= zF).sort((a, b) => a - b).filter((z, i, list) => i === 0 || z - list[i - 1] > 0.004);
-  for (let z = zR + 0.07; z < zF; z += 0.07) if (stations.every(m => Math.abs(m - z) > 0.03)) stations.push(z);
+  for (let z = zR + detail.step; z < zF; z += detail.step) if (stations.every(m => Math.abs(m - z) > detail.step * 0.45)) stations.push(z);
   stations.sort((a, b) => a - b);
 
   const ringOf = half => {                  // both sides: up the left, down the right
@@ -80,8 +84,8 @@ export function buildShell(spec, arches) {
     const base = ringOf(section(zBase)), cap = s[end], yb = base[0][1], yt = base[HALF][1], yc = yb + 0.45 * (yt - yb);
     caps[end] = { base, yc, zBase, dir, ...cap };
     const list = [];
-    for (let k = 1; k <= 10; k++) {
-      const a = k * Math.PI / 20, u = Math.sin(a) ** (2 / cap.nx), sx = Math.cos(a) ** (2 / cap.nx), sy = (1 - u ** cap.ny) ** (1 / cap.ny);
+    for (let k = 1; k <= detail.cap; k++) {
+      const a = k * Math.PI / (2 * detail.cap), u = Math.sin(a) ** (2 / cap.nx), sx = Math.cos(a) ** (2 / cap.nx), sy = (1 - u ** cap.ny) ** (1 / cap.ny);
       list.push({ z: zBase + dir * cap.d * u, pts: base.map(([x, y]) => [x * sx, yc + (y - yc) * sy]), cap: true });
     }
     if (dir < 0) rings.push(...list.reverse());
@@ -157,7 +161,7 @@ export function buildShell(spec, arches) {
   // side: 1 left, -1 right, 0 one patch across the middle (x from -outer to outer).
   function patch(end, { x, y, yOut = y, edge = 0.95 }, side) {
     const cap = caps[end], hw = cap.base.reduce((m, p) => Math.max(m, p[0]), 0), yb = cap.base[0][1], yt = cap.base[HALF][1];
-    const NX = side ? 14 : 24, NY = 4, pos = [], idx = [];
+    const NX = Math.round(detail.patch[0] * (side ? 1 : 1.7)), NY = detail.patch[1], pos = [], idx = [];
     for (let i = 0; i <= NX; i++) {
       let t = i / NX;
       if (side) t = 1 - (1 - t) ** 1.7;                  // closer together where the surface turns the corner

@@ -10,7 +10,8 @@
     "map:fetch": "node tools/fetch-map.mjs",
     "map:build": "node tools/build-map.mjs",
     "radio:build": "node tools/build-radio.mjs",
-    "lanes:check": "node tools/check-lanes.mjs"
+    "lanes:check": "node tools/check-lanes.mjs",
+    "traffic:check": "node tools/check-traffic.mjs"
   },
   "dependencies": {
     "three": "^0.187.0"

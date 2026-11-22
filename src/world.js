@@ -6,6 +6,7 @@ import { createFacadeKit, buildFacades } from './map/facades.js';
 import { analyseStreets, limitOf } from './map/network.js';
 import { buildLaneGraph, signalState, lampLit } from './map/lanes.js';
 import { LAMP_COLOURS } from './map/street.js';
+import { createTrafficKit } from './trafficview.js';
 import { Atlas } from './map/atlas.js';
 import { ENV } from './map/shared.js';
 
@@ -24,6 +25,7 @@ export async function createWorld(dir) {
   const group = new THREE.Group();
   const atlas = new Atlas(256, 64, 8, 64), tallAtlas = new Atlas(64, 256, 16, 2);
   const streetKit = createStreetKit(atlas), facadeKit = createFacadeKit(atlas, tallAtlas);
+  const trafficKit = createTrafficKit();          // car bodies, for the traffic and for parked cars
   const sea = new THREE.Mesh(
     new THREE.PlaneGeometry(20000, 20000).rotateX(-Math.PI / 2).translate((map.x0 + map.x1) / 2, 0, (map.z0 + map.z1) / 2),
     new THREE.MeshStandardMaterial({ color: 0x2f6f96, roughness: 0.25, metalness: 0.1 }),
@@ -207,6 +209,7 @@ export async function createWorld(dir) {
     const d = zone.data;
     zone.outlines = d.b.map(b => b.p).concat(d.nb);
     const streets = buildStreets(ctx, zone);
+    if (streets.parked.length) streets.group.add(trafficKit.parkedMesh(streets.parked, ground));
     group.add(streets.group, buildFacades(d.b.filter(b => b.h < TALL), ground, facadeKit, zone.seed + 1000));
     for (const b of d.b) addSolid(b.p);
     // poles and tree trunks: circles, kept in the same grid
@@ -326,7 +329,7 @@ export async function createWorld(dir) {
   // surface the car's wheels rest on
   const surface = (x, z) => ground(x, z) + LAYER.major;
   return Object.assign(api, {
-    map, group, ground, surface, query, roadAt, spawnOn, posts, update: updateSignals, lanes, signalAt: junction => signalState(junction, signalTime), setConditions, lightLamps, setLampLights,
+    map, group, ground, surface, query, roadAt, spawnOn, posts, update: updateSignals, lanes, trafficKit, signalAt: junction => signalState(junction, signalTime), setConditions, lightLamps, setLampLights,
     stream, prepare, loadAll: () => prepare(0, 0, Infinity),
     get pending() { return pending; },
     // left out of the picture mirrored in a wet road: the road itself and the light painted on it
