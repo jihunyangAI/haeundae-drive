@@ -48,7 +48,7 @@ $('#attribution').textContent = world.map.meta.attribution;
 const traffic = createTraffic(world.lanes, { signalOf: world.signalAt });
 const trafficView = createTrafficView(world.trafficKit, scene, world.ground);
 const people = createPeople(world.walks, { signalOf: world.signalAt });
-const peopleView = createPeopleView(scene, world.ground);
+const peopleView = createPeopleView(scene, world.ground, `${BASE}people/`);
 let peopleFilled = false, brakeForPeople = 0;
 const TRAFFIC = [['none', '없음', 0], ['light', '적음', 0.5], ['normal', '보통', 1]];
 let trafficLevel = 'normal', trafficFilled = false;
@@ -60,14 +60,15 @@ function updateTraffic(dt) {
   const level = TRAFFIC.find(t => t[0] === trafficLevel)[2], want = Math.round(quality.traffic * level * busy);
   // people stay in when it is dark or wet
   const out = ({ night: 0.35, dawn: 0.3 }[atmosphere.time.id] ?? 1) * ({ rain: 0.5, snow: 0.6, fog: 0.8 }[atmosphere.weather.id] ?? 1);
-  const crowd = Math.round(quality.people * Math.min(1, level * 2) * out);
+  const crowd = window.__game?.crowd ?? Math.round(quality.people * Math.min(1, level * 2) * out);
   frustum.setFromProjectionMatrix(viewMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
   const player = { x: car.x, z: car.z, vx: car.vx, vz: car.vz };
   brakeForPeople = people.step(Math.min(dt, 0.1), {
-    focus: car, want: crowd, cars: traffic.cars, player, hidden: outOfSight, near: peopleFilled ? 45 : 14, wet: Math.max(atmosphere.rain, atmosphere.snowfall), stops: world.stops,
+    // to begin with the streets are filled wherever there is room, in view or not; after that people only turn up unseen
+    focus: car, want: crowd, cars: traffic.cars, player, hidden: peopleFilled ? outOfSight : () => true, near: peopleFilled ? 45 : 14, wet: Math.max(atmosphere.rain, atmosphere.snowfall), stops: world.stops,
   });
   if (people.people.length >= crowd * 0.8) peopleFilled = true;
-  peopleView.sync(people.people);
+  peopleView.sync(people.people, dt, camera);
   if (!want && !traffic.cars.length) { trafficView.sync([], { lights: false, time: 0 }); return; }
   // the streets start out populated: the first cars may appear closer than later ones
   traffic.step(Math.min(dt, 0.1), { focus: car, want, player, hidden: outOfSight, near: trafficFilled ? 90 : 35, people: people.people });
@@ -150,9 +151,9 @@ let tunnel = false;                      // radio reception drops while the car 
 // Three levels. "auto" picks one from the graphics chip and steps down if the frame rate stays low.
 const QUALITY = {
   // mirrors: width of the picture the car's mirrors show, and how many frames pass between redraws
-  low: { name: '낮음', pixels: 1, shadows: 0, particles: 0.5, bloom: false, lampLights: 0, reflections: false, mirrors: null, traffic: 8, people: 0 },
-  medium: { name: '보통', pixels: 1.5, shadows: 2048, particles: 0.75, bloom: true, lampLights: 4, reflections: false, mirrors: { width: 320, every: 4 }, traffic: 20, people: 30 },
-  high: { name: '높음', pixels: 2, shadows: 4096, particles: 1, bloom: true, lampLights: 6, reflections: true, mirrors: { width: 640, every: 2 }, traffic: 40, people: 80 },
+  low: { name: '낮음', pixels: 1, shadows: 0, particles: 0.5, bloom: false, lampLights: 0, reflections: false, mirrors: null, traffic: 8, people: 25 },
+  medium: { name: '보통', pixels: 1.5, shadows: 2048, particles: 0.75, bloom: true, lampLights: 4, reflections: false, mirrors: { width: 320, every: 4 }, traffic: 20, people: 110 },
+  high: { name: '높음', pixels: 2, shadows: 4096, particles: 1, bloom: true, lampLights: 6, reflections: true, mirrors: { width: 640, every: 2 }, traffic: 40, people: 150 },
 };
 const ORDER = ['low', 'medium', 'high'];
 function guessQuality() {
@@ -525,6 +526,7 @@ renderer.setAnimationLoop(now => {
 
 // Handle for automated checks: runs the simulation without rendering. input(t) returns the controls at time t.
 window.__game = {
+  crowd: null,                                // a number here overrides how many people are about, for measuring
   pose: null,                                 // { angle, dist, height, fov }: holds the menu camera still, for pictures of the car
   readyMs: Math.round(performance.now()),     // time from opening the page to being playable
   world, scene, camera, renderer, setState, setQuality, get quality() { return `${qualityChoice}:${qualityLevel}`; }, selectCar, setSky, atmosphere, radio, sound,

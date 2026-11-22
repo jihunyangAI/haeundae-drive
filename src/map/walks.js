@@ -6,7 +6,9 @@
 // paving between two of those, 'path' a footpath.
 
 const KERBED = /^(trunk|primary|secondary|tertiary|residential|unclassified|living_street)$/;
-const OUT = 1.6;            // how far outside the kerb people walk, metres
+// How far outside the kerb people walk, metres: on the building side of the pavement, behind the
+// street trees (2.1 m out), lamps and sign posts.
+const OUT = 2.72;
 const lengthOf = pts => pts.reduce((s, p, i) => (i ? s + Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) : 0), 0);
 
 // graph: from buildLaneGraph. map: the base map (for its footpaths).

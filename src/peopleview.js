@@ -1,75 +1,36 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { LAYER } from './map/meshes.js';
 
-// Draws the people of src/people.js: one small figure each, from a pool. A figure is a single mesh;
-// its arms and legs swing in the vertex shader, and its clothes, hair and umbrella are set per person.
+// Draws the people of src/people.js with rigged models that walk with a real walk cycle: eight
+// characters by Quaternius (CC0, see public/people/README.txt). Each character arrives as several
+// pieces, one per material; here they are joined into one mesh whose shirt, trousers, hair and skin
+// can be recoloured per person, so a crowd does not look like eight people copied.
 
-const SKIN = ['#e8c4a0', '#dcb48c', '#f0d2b4', '#c99a72'];
-const TOPS = ['#2f3b52', '#8a2f2f', '#d9d6cf', '#3f6b4f', '#1d1f24', '#b9a27a', '#4a6fa5', '#7d4f8c', '#e0a030', '#5c6670', '#c0c4c8', '#a84c3a'];
-const BOTTOMS = ['#22262e', '#3a4658', '#5a5148', '#1a1c20', '#6f6a60', '#2f3f5f', '#8a8376'];
-const HAIR = ['#15120f', '#231a14', '#3a2a1c', '#0d0d0f', '#5a5a5e', '#8c8c8c'];
+const MODELS = ['man1', 'man2', 'man3', 'man4', 'woman1', 'woman2', 'woman3', 'woman4'];
+const HEIGHT = 1.72;                    // metres, before each person's own scaling
+const SKIN = ['#e9c6a5', '#dfb793', '#f1d5ba', '#d4a57f', '#e4bd9a'];
+const TOPS = ['#2f3b52', '#8a2f2f', '#d9d6cf', '#3f6b4f', '#1d1f24', '#b9a27a', '#4a6fa5', '#7d4f8c', '#e0a030', '#5c6670', '#c0c4c8', '#a84c3a', '#f0efe9', '#31465e', '#6e7f5a'];
+const BOTTOMS = ['#22262e', '#3a4658', '#5a5148', '#1a1c20', '#6f6a60', '#2f3f5f', '#8a8376', '#26303f'];
+const HAIR = ['#15120f', '#1c1612', '#231a14', '#0d0d0f', '#2e2218', '#4a4a4e', '#8c8c8c'];
 const BROLLIES = ['#1c1f24', '#2b4a7a', '#7a2b2b', '#e8e6e0', '#3d6b4a', '#d8a020', '#5a3f7a'];
 const pick = (list, t) => list[Math.floor(t * list.length) % list.length];
-
-// limb: 0 body, 1 left leg, 2 right leg, 3 left arm, 4 right arm. tone: 0 skin, 1 top, 2 bottom, 3 hair, 4 shoes, 5 umbrella.
-function figure() {
-  const parts = [];
-  const add = (geo, limb, tone, x, y, z) => {
-    const g = geo.index ? geo.toNonIndexed() : geo, n = g.attributes.position.count;
-    g.translate(x, y, z);
-    g.deleteAttribute('uv');
-    g.setAttribute('limb', new THREE.BufferAttribute(new Float32Array(n).fill(limb), 1));
-    g.setAttribute('tone', new THREE.BufferAttribute(new Float32Array(n).fill(tone), 1));
-    g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3).fill(1), 3));
-    parts.push(g);
-  };
-  add(new THREE.BoxGeometry(0.34, 0.52, 0.2), 0, 1, 0, 1.16, 0);
-  add(new THREE.BoxGeometry(0.32, 0.18, 0.2), 0, 2, 0, 0.86, 0);
-  add(new THREE.CylinderGeometry(0.045, 0.05, 0.08, 6), 0, 0, 0, 1.45, 0);
-  add(new THREE.SphereGeometry(0.105, 10, 8).scale(1, 1.16, 1.05), 0, 0, 0, 1.6, 0);
-  add(new THREE.SphereGeometry(0.113, 10, 5, 0, Math.PI * 2, 0, Math.PI * 0.55).scale(1, 1.16, 1.08), 0, 3, 0, 1.615, -0.008);
-  for (const [side, leg, arm] of [[1, 1, 3], [-1, 2, 4]]) {
-    add(new THREE.CapsuleGeometry(0.066, 0.66, 2, 6), leg, 2, side * 0.09, 0.455, 0);
-    add(new THREE.BoxGeometry(0.11, 0.07, 0.24), leg, 4, side * 0.09, 0.035, 0.045);
-    add(new THREE.CapsuleGeometry(0.046, 0.46, 2, 6), arm, 1, side * 0.215, 1.13, 0);
-    add(new THREE.SphereGeometry(0.046, 6, 5), arm, 0, side * 0.215, 0.85, 0);
-  }
-  add(new THREE.ConeGeometry(0.58, 0.2, 8, 1, true), 0, 5, -0.12, 2.04, 0.05);
-  add(new THREE.CylinderGeometry(0.012, 0.012, 0.95, 5), 0, 5, -0.12, 1.56, 0.05);
-  return mergeGeometries(parts);
-}
+// which part of the body a piece is, from the name of its material: 0 skin, 1 top, 2 bottom, 3 hair, 4 as made
+const toneOf = name => (/skin/i.test(name) ? 0 : /shirt|dress|jacket/i.test(name) ? 1 : /pants/i.test(name) ? 2 : /hair|eyebrow/i.test(name) ? 3 : 4);
 
 function personMaterial() {
-  const uniforms = {
-    uStride: { value: 0 }, uSwing: { value: 0 }, uUmbrella: { value: 0 },
-    uSkin: { value: new THREE.Color() }, uTop: { value: new THREE.Color() }, uBottom: { value: new THREE.Color() },
-    uHair: { value: new THREE.Color() }, uBrolly: { value: new THREE.Color() },
-  };
-  const m = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+  const uniforms = { uSkin: { value: new THREE.Color() }, uTop: { value: new THREE.Color() }, uBottom: { value: new THREE.Color() }, uHair: { value: new THREE.Color() } };
+  const m = new THREE.MeshLambertMaterial({ vertexColors: true });
   m.onBeforeCompile = shader => {
     Object.assign(shader.uniforms, uniforms);
-    shader.vertexShader = `attribute float limb;
-attribute float tone;
-uniform float uStride, uSwing, uUmbrella;
-uniform vec3 uSkin, uTop, uBottom, uHair, uBrolly;
+    shader.vertexShader = `attribute float tone;
+uniform vec3 uSkin, uTop, uBottom, uHair;
 ${shader.vertexShader}`.replace(
       '#include <color_vertex>',
       `#include <color_vertex>
-  vColor.rgb = tone < 0.5 ? uSkin : tone < 1.5 ? uTop : tone < 2.5 ? uBottom : tone < 3.5 ? uHair : tone < 4.5 ? vec3(0.07) : uBrolly;`,
-    ).replace(
-      '#include <begin_vertex>',
-      `#include <begin_vertex>
-  if (limb > 0.5) {
-    // legs swing from the hip and arms from the shoulder, opposite arm with each leg
-    float pivot = limb < 2.5 ? 0.86 : 1.38;
-    float way = (limb < 1.5 || limb > 3.5) ? 1.0 : -1.0;
-    float angle = sin(uStride) * uSwing * way * (limb < 2.5 ? 0.55 : 0.42);
-    float c = cos(angle), s = sin(angle), y = transformed.y - pivot;
-    transformed.y = pivot + y * c - transformed.z * s;
-    transformed.z = y * s + transformed.z * c;
-  }
-  if (tone > 4.5 && uUmbrella < 0.5) transformed = vec3(0.0, 1.2, 0.0);     // no umbrella: folded away to nothing`,
+  if (tone < 3.5) vColor.rgb = tone < 0.5 ? uSkin : tone < 1.5 ? uTop : tone < 2.5 ? uBottom : uHair;`,
     );
   };
   m.customProgramCacheKey = () => 'person';
@@ -77,38 +38,114 @@ ${shader.vertexShader}`.replace(
   return m;
 }
 
-// ground(x, z): height of the ground.
-export function createPeopleView(scene, ground) {
-  const group = new THREE.Group(), geometry = figure(), pool = [], dressed = new WeakMap();
+// Turn a loaded character into a template: one skinned mesh, scaled to HEIGHT, with its walk and idle clips.
+function prepare(gltf) {
+  const scene = gltf.scene, pieces = [];
+  scene.traverse(o => { if (o.isSkinnedMesh) pieces.push(o); });
+  const geometry = mergeGeometries(pieces.map(piece => {
+    const g = piece.geometry.clone(), n = g.attributes.position.count, colours = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) piece.material.color.toArray(colours, i * 3);
+    for (const name of Object.keys(g.attributes)) if (!['position', 'normal', 'skinIndex', 'skinWeight'].includes(name)) g.deleteAttribute(name);
+    g.setAttribute('color', new THREE.BufferAttribute(colours, 3));
+    g.setAttribute('tone', new THREE.BufferAttribute(new Float32Array(n).fill(toneOf(piece.material.name)), 1));
+    return g;
+  }));
+  const first = pieces[0], body = new THREE.SkinnedMesh(geometry, personMaterial());
+  body.name = 'body';
+  first.parent.add(body);
+  body.position.copy(first.position);
+  body.quaternion.copy(first.quaternion);
+  body.scale.copy(first.scale);
+  body.bind(first.skeleton, first.bindMatrix);
+  for (const piece of pieces) piece.parent.remove(piece);
+  scene.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(scene), k = HEIGHT / (box.max.y - box.min.y);
+  scene.scale.setScalar(k);
+  scene.position.y = -box.min.y * k;
+  const clip = pattern => gltf.animations.find(a => pattern.test(a.name));
+  const walk = clip(/Walk$/), idle = clip(/Idle$/) || clip(/Standing$/);
+  if (!walk || !idle) throw new Error('character without a walk or idle animation');
+  return { scene, walk, idle };
+}
+
+// ground(x, z): height of the ground. dir: where the models are, with a trailing slash.
+export function createPeopleView(scene, ground, dir) {
+  const group = new THREE.Group(), templates = [], pools = [], shown = new Map();     // shown: person id -> figure
   scene.add(group);
+  const loader = new GLTFLoader();
+  MODELS.forEach((name, i) => loader.load(`${dir}${name}.glb`, gltf => { try { templates[i] = prepare(gltf); pools[i] = []; } catch (e) { console.warn(name, e.message); } }, undefined, () => { /* without it, people of this kind are not drawn */ }));
+
+  // a soft dark patch under the feet in place of a real shadow, and the umbrella
+  const blot = new THREE.Mesh(new THREE.CircleGeometry(0.34, 12).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28, depthWrite: false }));
+  const brollyShape = mergeGeometries([new THREE.ConeGeometry(0.6, 0.2, 8, 1, true).translate(0, 2.06, 0), new THREE.CylinderGeometry(0.012, 0.012, 0.95, 5).translate(0, 1.6, 0)].map(g => g.toNonIndexed()));
+  const brollyMaterials = BROLLIES.map(c => new THREE.MeshLambertMaterial({ color: c, side: THREE.DoubleSide }));
+
+  function figure(kind) {
+    const t = templates[kind], root = new THREE.Group(), model = cloneSkinned(t.scene);
+    const body = model.getObjectByName('body');
+    body.material = personMaterial();
+    const mixer = new THREE.AnimationMixer(model), walk = mixer.clipAction(t.walk), idle = mixer.clipAction(t.idle);
+    walk.play();
+    idle.play();
+    const shade = blot.clone(), brolly = new THREE.Mesh(brollyShape, brollyMaterials[0]);
+    shade.position.y = 0.03;
+    brolly.position.set(-0.16, 0, 0.08);
+    root.add(model, shade, brolly);
+    group.add(root);
+    return { root, kind, uniforms: body.material.userData.uniforms, mixer, walk, idle, brolly, gait: 1, time: 0 };
+  }
+
+  const sphere = new THREE.Sphere(), frustum = new THREE.Frustum(), matrix = new THREE.Matrix4();
+  let frame = 0;
   return {
     group,
-    sync(people) {
-      people.forEach((p, i) => {
-        let mesh = pool[i];
-        if (!mesh) {
-          mesh = pool[i] = new THREE.Mesh(geometry, personMaterial());
-          group.add(mesh);
-        }
-        const u = mesh.material.userData.uniforms;
-        if (dressed.get(mesh) !== p.id) {                   // a different person is using this figure now
-          dressed.set(mesh, p.id);
-          u.uSkin.value.set(pick(SKIN, p.look[0]));
-          u.uTop.value.set(pick(TOPS, p.look[1]));
-          u.uBottom.value.set(pick(BOTTOMS, p.look[2]));
-          u.uHair.value.set(pick(HAIR, (p.look[0] * 7 + p.look[1]) % 1));
-          u.uBrolly.value.set(pick(BROLLIES, (p.look[1] * 5 + p.look[2]) % 1));
-          mesh.scale.setScalar(p.height);
+    get ready() { return templates.filter(Boolean).length; },
+    // camera: to animate only the figures that can be seen, and the distant ones less often
+    sync(people, dt, camera) {
+      frame++;
+      frustum.setFromProjectionMatrix(matrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+      const alive = new Set();
+      for (const p of people) {
+        const kind = Math.floor(p.look[0] * MODELS.length) % MODELS.length;
+        if (!templates[kind]) continue;                     // its model has not arrived yet
+        alive.add(p.id);
+        let f = shown.get(p.id);
+        if (!f) {
+          f = pools[kind].pop() || figure(kind);
+          shown.set(p.id, f);
+          f.root.visible = true;
+          f.root.scale.setScalar(p.height);
+          f.uniforms.uSkin.value.set(pick(SKIN, p.look[1]));
+          f.uniforms.uTop.value.set(pick(TOPS, p.look[2]));
+          f.uniforms.uBottom.value.set(pick(BOTTOMS, (p.look[1] * 7 + p.look[2] * 3) % 1));
+          f.uniforms.uHair.value.set(pick(HAIR, (p.look[0] * 11 + p.look[1] * 5) % 1));
+          f.brolly.material = brollyMaterials[Math.floor(p.look[2] * 97) % brollyMaterials.length];
+          f.gait = p.moving ? 1 : 0;
+          f.time = 0;
         }
         const lift = p.edge.kind === 'cross' ? LAYER.mark : p.edge.kind === 'path' ? LAYER.path : LAYER.sidewalk;
-        mesh.position.set(p.x, ground(p.x, p.z) + lift, p.z);
-        mesh.rotation.y = Math.atan2(p.ux, p.uz);
-        mesh.visible = true;
-        u.uUmbrella.value = p.umbrella ? 1 : 0;
-        u.uStride.value = p.stride;
-        u.uSwing.value += ((p.moving ? 1 : 0) - u.uSwing.value) * 0.2;
-      });
-      for (let i = people.length; i < pool.length; i++) pool[i].visible = false;
+        f.root.position.set(p.x, ground(p.x, p.z) + lift, p.z);
+        f.root.rotation.y = Math.atan2(p.ux, p.uz);
+        f.brolly.visible = p.umbrella;
+        // walking and standing blend into each other over a moment
+        f.gait += ((p.moving ? 1 : 0) - f.gait) * Math.min(1, dt * 6);
+        f.time += dt;
+        const seen = frustum.intersectsSphere(sphere.set(f.root.position, 2.4)), far = f.root.position.distanceTo(camera.position);
+        // the walk cycle is advanced every frame up close, every third frame beyond 45 m, and not at all out of sight
+        if (seen && (far < 45 || (frame + p.id) % 3 === 0)) {
+          f.walk.setEffectiveWeight(f.gait);
+          f.idle.setEffectiveWeight(1 - f.gait);
+          f.walk.timeScale = (p.dodge > 0 ? 2.2 : p.pace / 1.25);
+          f.mixer.update(f.time);
+          f.time = 0;
+        }
+      }
+      for (const [id, f] of shown) {
+        if (alive.has(id)) continue;
+        f.root.visible = false;
+        pools[f.kind].push(f);
+        shown.delete(id);
+      }
     },
   };
 }

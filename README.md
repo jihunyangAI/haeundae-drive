@@ -17,5 +17,6 @@ npm run dev
 
 - 지도: © OpenStreetMap contributors (ODbL). 일부 건물은 지도에 없어 추정으로 채웠습니다.
 - 고도: Mapzen Terrarium 타일 (AWS Open Data)
+- 인물 모델: Quaternius (quaternius.com), CC0 1.0
 - 음악: Kevin MacLeod (incompetech.com), CC BY 4.0
 - three.js, Vite

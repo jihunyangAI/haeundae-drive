@@ -127,6 +127,7 @@ export function buildStreets(ctx, zone) {
   // kind: 'ginkgo' (the usual street tree), 'pine' along the sea front, 'cherry' on Dalmaji-gil
   const tree = (x, z, own, kind = 'ginkgo') => {
     if (!owns(x, z) || inBuilding(x, z) || !map.isLand(x, z) || nearRoad(x, z, 0.8, 'drive', own)) return;
+    if (stops.some(s => Math.abs(s.kx - x) < 4.5 && Math.abs(s.kz - z) < 4.5)) return;       // not in a bus shelter
     const y = ground(x, z), turn = rand() * 6.28;
     if (kind === 'pine') {
       const h = 5.5 + rand() * 2, w = 1.5 + rand() * 0.5, green = new THREE.Color().setHSL(0.36 + rand() * 0.04, 0.42, 0.13 + rand() * 0.05);
@@ -456,9 +457,9 @@ export function buildStreets(ctx, zone) {
     stop.shelter = true;                                   // people only wait where there is one
     const y = ground(stop.kx, stop.kz) + LAYER.sidewalk, heading = Math.atan2(stop.ux, stop.uz), rx = -stop.uz, rz = stop.ux;
     const spot = (along, out) => [stop.kx + stop.ux * along + rx * out, stop.kz + stop.uz * along + rz * out];
-    put('box', ...[spot(0, 0.35)[0], y + 2.5, spot(0, 0.35)[1]], heading, 1.5, 0.08, 3.8);           // roof
-    put('panel', ...[spot(0, 1.0)[0], y + 1.3, spot(0, 1.0)[1]], heading, 0.05, 2.3, 3.6);           // glass back
-    put('box', ...[spot(0, 0.7)[0], y + 0.45, spot(0, 0.7)[1]], heading, 0.4, 0.07, 2.2);            // bench
+    put('box', ...[spot(0, 0.2)[0], y + 2.5, spot(0, 0.2)[1]], heading, 1.3, 0.08, 3.8);             // roof
+    put('panel', ...[spot(0, 0.78)[0], y + 1.3, spot(0, 0.78)[1]], heading, 0.05, 2.3, 3.6);         // glass back
+    put('box', ...[spot(0, 0.52)[0], y + 0.45, spot(0, 0.52)[1]], heading, 0.36, 0.07, 2.2);         // bench
     for (const along of [-1.8, 1.8]) {
       const [x, z] = spot(along, -0.3);
       put('pole', x, y + 1.25, z, 0, 0.04, 2.5, 0.04);

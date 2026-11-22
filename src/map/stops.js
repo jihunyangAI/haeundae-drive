@@ -19,7 +19,7 @@ export function buildStops(graph, usable = () => true) {
     const a = lane.pts[i - 1], b = lane.pts[i], seg = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, t = Math.min(1, (s - run) / seg);
     const x = a[0] + (b[0] - a[0]) * t, z = a[1] + (b[1] - a[1]) * t, ux = (b[0] - a[0]) / seg, uz = (b[1] - a[1]) / seg;
     if (stops.some(o => Math.hypot(o.x - x, o.z - z) < SPACING && o.ux * ux + o.uz * uz > 0)) continue;
-    const out = road.w / 2 - Math.abs(lane.o) + 2.2;          // from the middle of the kerb lane to the shelter
+    const out = road.w / 2 - Math.abs(lane.o) + 1.3;          // from the middle of the kerb lane to the shelter, which stands at the kerb
     if (!usable(x - uz * out, z + ux * out)) continue;
     const base = PLACES[road.n] || road.n, n = counts[base] = (counts[base] || 0) + 1;
     const stop = { id: stops.length, name: n > 1 ? `${base} ${n}` : base, lane, s, x, z, ux, uz, kx: x - uz * out, kz: z + ux * out, waiting: 0, shelter: false };

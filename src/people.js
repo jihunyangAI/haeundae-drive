@@ -3,7 +3,7 @@
 // player's car. No rendering in here (see peopleview.js), so tools/check-people.mjs can run it under Node.
 import { signalState } from './map/lanes.js';
 
-const REACH = 170, GONE = 200;
+const REACH = 125, GONE = 150;        // people are kept within sight of the player: further off they would be dots
 const BODY = 0.3;                       // radius of a person, metres
 
 function measure(edge) {
@@ -171,7 +171,7 @@ export function createPeople(walks, options = {}) {
     const along = (rand() - 0.5) * 3.4, back = -0.1 + rand() * 0.4,       // under the roof, in front of the bench
        x = stop.kx + stop.ux * along - stop.uz * back, z = stop.kz + stop.uz * along + stop.ux * back;
     const d = Math.hypot(x - focus.x, z - focus.z);
-    if (d < near || d > REACH || (d < 110 && !hidden(x, z))) return false;
+    if (d < near || d > REACH || (d < 90 && !hidden(x, z))) return false;
     stop.waiting++;
     people.push({
       id: nextId++, edge: AT_STOP, stand: stop, bx: x, bz: z, dir: 1, s: 0, next: null, pace: 1.2, lat: 0, wait: 0, counted: false,
@@ -189,10 +189,10 @@ export function createPeople(walks, options = {}) {
     const s = rand() * edge.len;
     poseAt(edge, s, pose);
     const d = Math.hypot(pose.x - focus.x, pose.z - focus.z);
-    if (d < near || d > REACH || (d < 110 && !hidden(pose.x, pose.z))) return false;
+    if (d < near || d > REACH || (d < 90 && !hidden(pose.x, pose.z))) return false;
     const dir = rand() < 0.5 ? 1 : -1;
     const p = {
-      id: nextId++, edge, dir, s: dir > 0 ? s : edge.len - s, next: null, pace: 1.05 + rand() * 0.5, lat: 0.35 + rand() * 0.5,
+      id: nextId++, edge, dir, s: dir > 0 ? s : edge.len - s, next: null, pace: 1.05 + rand() * 0.5, lat: 0.02 + rand() * 0.22,
       wait: 0, counted: false, dodge: 0, away: 1, awayX: 0, awayZ: 0, ox: 0, oz: 0, moving: true, stride: rand() * 6,
       x: pose.x, z: pose.z, ux: pose.ux * dir, uz: pose.uz * dir,
       // what they look like: three numbers 0..1 for the view to pick colours and build from, and whether they carry an umbrella
@@ -235,6 +235,30 @@ export function createPeople(walks, options = {}) {
       }
       let standing = 0;
       for (const p of people) if (p.stand) standing++;
+      // People keep a little apart: two who come too close step aside from each other.
+      const cells = new Map();
+      for (const p of people) {
+        const key = `${Math.floor(p.x / 1.2)},${Math.floor(p.z / 1.2)}`;
+        if (!cells.has(key)) cells.set(key, []);
+        cells.get(key).push(p);
+      }
+      for (const p of people) {
+        const cx = Math.floor(p.x / 1.2), cz = Math.floor(p.z / 1.2);
+        for (let i = cx - 1; i <= cx + 1; i++) for (let j = cz - 1; j <= cz + 1; j++) {
+          for (const q of cells.get(`${i},${j}`) || []) {
+            if (q.id <= p.id) continue;
+            const dx = q.x - p.x, dz = q.z - p.z, d = Math.hypot(dx, dz);
+            if (d >= 0.62 || d < 1e-4) continue;
+            // each steps to the side of their own way, never backwards, and only gradually
+            const amount = Math.min(0.5, (0.62 - d) * 4) * dt;
+            for (const [a, away] of [[p, -1], [q, 1]]) {
+              const sx = -a.uz, sz = a.ux, side = (dx * sx + dz * sz) * away >= 0 ? 1 : -1;
+              a.ox += sx * side * amount;
+              a.oz += sz * side * amount;
+            }
+          }
+        }
+      }
       for (const stop of stops) {
         if (stop.shelter && standing < want * 0.25 && people.length < want && stop.waiting < 2 && Math.abs(stop.kx - focus.x) < REACH && Math.abs(stop.kz - focus.z) < REACH && wait(stop, focus, near, hidden)) standing++;
       }
