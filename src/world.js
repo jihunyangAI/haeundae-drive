@@ -7,6 +7,7 @@ import { analyseStreets, limitOf } from './map/network.js';
 import { buildLaneGraph, signalState, lampLit } from './map/lanes.js';
 import { LAMP_COLOURS } from './map/street.js';
 import { createTrafficKit } from './trafficview.js';
+import { buildWalks } from './map/walks.js';
 import { Atlas } from './map/atlas.js';
 import { ENV } from './map/shared.js';
 
@@ -329,7 +330,9 @@ export async function createWorld(dir) {
   // surface the car's wheels rest on
   const surface = (x, z) => ground(x, z) + LAYER.major;
   return Object.assign(api, {
-    map, group, ground, surface, query, roadAt, spawnOn, posts, update: updateSignals, lanes, trafficKit, signalAt: junction => signalState(junction, signalTime), setConditions, lightLamps, setLampLights,
+    map, group, ground, surface, query, roadAt, spawnOn, posts, update: updateSignals, lanes, trafficKit,
+    // pavements, crossings and footpaths for people on foot
+    walks: buildWalks(lanes, map, { blocked: (x, z, road) => nearRoad(x, z, 0.3, 'drive', road), isLand: map.isLand }), signalAt: junction => signalState(junction, signalTime), setConditions, lightLamps, setLampLights,
     stream, prepare, loadAll: () => prepare(0, 0, Infinity),
     get pending() { return pending; },
     // left out of the picture mirrored in a wet road: the road itself and the light painted on it

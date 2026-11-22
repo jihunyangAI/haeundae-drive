@@ -105,6 +105,8 @@ export function createTraffic(graph, options = {}) {
       if (lamp === 'R') { car.why = 'signal'; return false; }
       if (lamp === 'Y' && car.v * car.v / (2 * HARD) < toLine) { car.why = 'signal'; return false; }
     } else if (!later && arm.give === 'stop' && !car.halted) { car.why = 'stopline'; return false; }
+    // people on the zebra crossing ahead of the stop line, or on the one it will leave the junction over
+    if (move.arm.walkers > 0 || move.to.from.walkers > 0) { car.why = 'people'; return false; }
     // room to clear the junction on the far side
     const to = move.to;
     let room = to.len, tail = null;
@@ -124,7 +126,7 @@ export function createTraffic(graph, options = {}) {
   }
 
   const pose = { x: 0, z: 0, ux: 0, uz: 1 };
-  function drive(car, dt, player) {
+  function drive(car, dt, player, people) {
     const path = car.path, onMove = !!path.turn;
     let gap = Infinity, lead = 0;
     // what is in the way, and (for a car) what is holding that one up in turn
@@ -169,7 +171,9 @@ export function createTraffic(graph, options = {}) {
     }
     car.blocked = false;
     const mind = player && Math.abs(player.x - car.x) < 40 && Math.abs(player.z - car.z) < 40 ? player : null;
-    if (others || mind) {
+    let walkers = null;                                    // people close enough to be stepped in front of
+    for (const p of people) if (Math.abs(p.x - car.x) < 22 && Math.abs(p.z - car.z) < 22) (walkers ||= []).push(p);
+    if (others || mind || walkers) {
       const far = car.len / 2 + 5 + car.v * 2.6;
       for (let d = car.len / 2 + 0.8; d < far; d += 2.4) {
         let on = path, s = car.s + d;
@@ -185,9 +189,13 @@ export function createTraffic(graph, options = {}) {
           const g = d - car.len / 2 - 2.2;
           if (g < gap) { see(g, Math.max(0, mind.vx * car.ux + mind.vz * car.uz), 'player'); car.blocked = true; car.why = 'player'; }
         }
+        for (const p of walkers || []) {
+          if (Math.hypot(p.x - pose.x, p.z - pose.z) < car.kind.wid / 2 + 0.55) { see(d - car.len / 2 - 1.2, 0, 'people'); break; }
+        }
         for (const c of others || []) {
           if (c.path === on) continue;
-          const reach = (c.kind.wid + car.kind.wid) / 2 * 0.8, span = c.len / 2 - c.kind.wid / 2;
+          // a long vehicle swings wide of its line in a bend, so it keeps further from what stands beside it
+          const reach = (c.kind.wid + car.kind.wid) / 2 * 0.8 + (car.len > 7 && onMove ? 0.7 : 0), span = c.len / 2 - c.kind.wid / 2;
           for (const k of [-1, 0, 1]) {
             if (Math.hypot(c.x + c.ux * span * k - pose.x, c.z + c.uz * span * k - pose.z) < reach) {
               see(d - car.len / 2 - 0.9, Math.max(0, c.v * (c.ux * car.ux + c.uz * car.uz)), 'insight', c);
@@ -284,11 +292,12 @@ export function createTraffic(graph, options = {}) {
   }
 
   return {
-    cars, events, stats,
+    cars, events, stats, signalOf,
     get time() { return time; },
     // focus: { x, z } where the player is; want: how many cars to keep around; player: the player's car as
     // { x, z, vx, vz } or null; hidden(x, z): true where a car may appear unseen; near: closest spawn distance.
-    step(dt, { focus, want, player = null, hidden = () => true, near = 90 }) {
+    // people: those on foot nearby (see people.js), whom the cars stop for.
+    step(dt, { focus, want, player = null, hidden = () => true, near = 90, people = [] }) {
       time += dt;
       if (time - nearbyAt > 1.5 || Math.hypot(focus.x - nearbyFor[0], focus.z - nearbyFor[1]) > 60) {
         nearbyAt = time;
@@ -299,7 +308,7 @@ export function createTraffic(graph, options = {}) {
       }
       for (let i = cars.length - 1; i >= 0; i--) {
         const car = cars[i], far = Math.hypot(car.x - focus.x, car.z - focus.z);
-        const alive = far < GONE && drive(car, dt, player);
+        const alive = far < GONE && drive(car, dt, player, people);
         // a car that has sat in a jam for a long time is taken away, out of sight if possible
         const jammed = car.jam > 50 && (far > 70 && hidden(car.x, car.z) || car.jam > 120);
         if (jammed) {

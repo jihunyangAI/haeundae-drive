@@ -14,6 +14,8 @@ import { Radio } from './radio.js';
 import { ENV } from './map/shared.js';
 import { createTraffic } from './traffic.js';
 import { createTrafficView } from './trafficview.js';
+import { createPeople } from './people.js';
+import { createPeopleView } from './peopleview.js';
 
 const $ = sel => document.querySelector(sel);
 const START_STREET = '마린시티2로';
@@ -45,6 +47,9 @@ $('#attribution').textContent = world.map.meta.attribution;
 // ---------- traffic ----------
 const traffic = createTraffic(world.lanes, { signalOf: world.signalAt });
 const trafficView = createTrafficView(world.trafficKit, scene, world.ground);
+const people = createPeople(world.walks, { signalOf: world.signalAt });
+const peopleView = createPeopleView(scene, world.ground);
+let peopleFilled = false, brakeForPeople = 0;
 const TRAFFIC = [['none', '없음', 0], ['light', '적음', 0.5], ['normal', '보통', 1]];
 let trafficLevel = 'normal', trafficFilled = false;
 const frustum = new THREE.Frustum(), viewMatrix = new THREE.Matrix4(), probe = new THREE.Sphere(new THREE.Vector3(), 7);
@@ -52,18 +57,26 @@ const frustum = new THREE.Frustum(), viewMatrix = new THREE.Matrix4(), probe = n
 const outOfSight = (x, z) => !frustum.intersectsSphere(probe.set(probe.center.set(x, world.ground(x, z) + 1, z), 7));
 function updateTraffic(dt) {
   const busy = { night: 0.45, dawn: 0.5 }[atmosphere.time.id] ?? 1;       // fewer cars about at night
-  const want = Math.round(quality.traffic * TRAFFIC.find(t => t[0] === trafficLevel)[2] * busy);
-  if (!want && !traffic.cars.length) { trafficView.sync([], { lights: false, time: 0 }); return; }
+  const level = TRAFFIC.find(t => t[0] === trafficLevel)[2], want = Math.round(quality.traffic * level * busy);
+  // people stay in when it is dark or wet
+  const out = ({ night: 0.35, dawn: 0.3 }[atmosphere.time.id] ?? 1) * ({ rain: 0.5, snow: 0.6, fog: 0.8 }[atmosphere.weather.id] ?? 1);
+  const crowd = Math.round(quality.people * Math.min(1, level * 2) * out);
   frustum.setFromProjectionMatrix(viewMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
   const player = { x: car.x, z: car.z, vx: car.vx, vz: car.vz };
+  brakeForPeople = people.step(Math.min(dt, 0.1), {
+    focus: car, want: crowd, cars: traffic.cars, player, hidden: outOfSight, near: peopleFilled ? 45 : 14, wet: Math.max(atmosphere.rain, atmosphere.snowfall),
+  });
+  if (people.people.length >= crowd * 0.8) peopleFilled = true;
+  peopleView.sync(people.people);
+  if (!want && !traffic.cars.length) { trafficView.sync([], { lights: false, time: 0 }); return; }
   // the streets start out populated: the first cars may appear closer than later ones
-  traffic.step(Math.min(dt, 0.1), { focus: car, want, player, hidden: outOfSight, near: trafficFilled ? 90 : 35 });
+  traffic.step(Math.min(dt, 0.1), { focus: car, want, player, hidden: outOfSight, near: trafficFilled ? 90 : 35, people: people.people });
   if (traffic.cars.length >= want * 0.8) trafficFilled = true;
   for (const e of traffic.events.splice(0)) if (e.type === 'honk') sound.honk(Math.max(0, 1 - Math.hypot(e.x - car.x, e.z - car.z) / 60));
   trafficView.sync(traffic.cars, { lights: atmosphere.wantsLights, time: traffic.time });
 }
 // everything the player's car can run into: the fixed world and the other cars
-const solids = { query(x, z, r, cb) { world.query(x, z, r, cb); traffic.query(x, z, r, cb); } };
+const solids = { query(x, z, r, cb) { world.query(x, z, r, cb); traffic.query(x, z, r, cb); people.query(x, z, r, cb); } };
 
 // ---------- car ----------
 const spawn = world.spawnOn(START_STREET);
@@ -137,9 +150,9 @@ let tunnel = false;                      // radio reception drops while the car 
 // Three levels. "auto" picks one from the graphics chip and steps down if the frame rate stays low.
 const QUALITY = {
   // mirrors: width of the picture the car's mirrors show, and how many frames pass between redraws
-  low: { name: '낮음', pixels: 1, shadows: 0, particles: 0.5, bloom: false, lampLights: 0, reflections: false, mirrors: null, traffic: 8 },
-  medium: { name: '보통', pixels: 1.5, shadows: 2048, particles: 0.75, bloom: true, lampLights: 4, reflections: false, mirrors: { width: 320, every: 4 }, traffic: 20 },
-  high: { name: '높음', pixels: 2, shadows: 4096, particles: 1, bloom: true, lampLights: 6, reflections: true, mirrors: { width: 640, every: 2 }, traffic: 40 },
+  low: { name: '낮음', pixels: 1, shadows: 0, particles: 0.5, bloom: false, lampLights: 0, reflections: false, mirrors: null, traffic: 8, people: 0 },
+  medium: { name: '보통', pixels: 1.5, shadows: 2048, particles: 0.75, bloom: true, lampLights: 4, reflections: false, mirrors: { width: 320, every: 4 }, traffic: 20, people: 30 },
+  high: { name: '높음', pixels: 2, shadows: 4096, particles: 1, bloom: true, lampLights: 6, reflections: true, mirrors: { width: 640, every: 2 }, traffic: 40, people: 80 },
 };
 const ORDER = ['low', 'medium', 'high'];
 function guessQuality() {
@@ -195,6 +208,8 @@ function update(dt, inp) {
   car.gx = (g(car.x + 1, car.z) - g(car.x - 1, car.z)) / 2;
   car.gz = (g(car.x, car.z + 1) - g(car.x, car.z - 1)) / 2;
   car.control(dt, inp);
+  // someone on foot right ahead: the car brakes by itself, whatever the driver is doing
+  if (!car.reverse && (brakeForPeople === 2 || brakeForPeople === 1 && Math.abs(car.vf) > 4)) { car.throttle = 0; car.brake = 1; }
   sound.horn(!!inp.horn);
   const n = Math.max(1, Math.ceil(dt * 240));
   for (let i = 0; i < n; i++) car.step(dt / n, atmosphere.grip);
@@ -357,7 +372,7 @@ function renderMenu() {
 }
 $('#time-list').addEventListener('click', e => e.target.dataset.time && setSky({ time: e.target.dataset.time }));
 $('#weather-list').addEventListener('click', e => e.target.dataset.weather && setSky({ weather: e.target.dataset.weather }));
-const setTraffic = level => { trafficLevel = level; if (level === 'none') traffic.clear(); trafficFilled = false; renderMenu(); };
+const setTraffic = level => { trafficLevel = level; if (level === 'none') { traffic.clear(); people.clear(); } trafficFilled = peopleFilled = false; renderMenu(); };
 $('#traffic-list').addEventListener('click', e => e.target.dataset.traffic && setTraffic(e.target.dataset.traffic));
 $('#car-list').addEventListener('click', e => {
   const card = e.target.closest('[data-car]');
@@ -515,8 +530,9 @@ window.__game = {
   world, scene, camera, renderer, setState, setQuality, get quality() { return `${qualityChoice}:${qualityLevel}`; }, selectCar, setSky, atmosphere, radio, sound,
   get car() { return car; },
   setView(next) { view = next; },
-  traffic, trafficView, setTraffic,
+  traffic, trafficView, setTraffic, people, peopleView,
   simulate(seconds, input, dt = 1 / 60) {
+    brakeForPeople = 0;               // people are not stepped here, so there is nobody to brake for
     for (let t = 0; t < seconds; t += dt) update(dt, input(t, car));
   },
 };

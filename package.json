@@ -11,7 +11,8 @@
     "map:build": "node tools/build-map.mjs",
     "radio:build": "node tools/build-radio.mjs",
     "lanes:check": "node tools/check-lanes.mjs",
-    "traffic:check": "node tools/check-traffic.mjs"
+    "traffic:check": "node tools/check-traffic.mjs",
+    "people:check": "node tools/check-people.mjs"
   },
   "dependencies": {
     "three": "^0.187.0"
