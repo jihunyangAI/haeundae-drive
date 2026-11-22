@@ -28,7 +28,7 @@ export function laneSplit(road) {
 // index 0 is the lane nearest the centre line (or the leftmost lane of a one-way street).
 export function laneOffset(road, dir, index) {
   const [, back] = laneSplit(road), laneW = (road.w - 1) / road.ln;
-  if (!road.ow && road.ln === 1) return dir * Math.min(1, road.w / 2 - 1);
+  if (!road.ow && road.ln === 1) return dir * Math.min(1.15, road.w / 2 - 0.85);     // a little over the edge line: just room for two cars to squeeze past
   return (back + dir * (index + 0.5) - road.ln / 2) * laneW;
 }
 
@@ -37,7 +37,10 @@ function offsetLine(p, o) {            // p: flat [x, z, ...]; returns [[x, z], 
   for (let i = 0; i < n; i++) {
     const a = Math.max(0, i - 1), b = Math.min(n - 1, i + 1);
     const dx = p[b * 2] - p[a * 2], dz = p[b * 2 + 1] - p[a * 2 + 1], len = Math.hypot(dx, dz) || 1;
-    out.push([p[i * 2] - dz / len * o, p[i * 2 + 1] + dx / len * o]);
+    // at a bend the corner is pushed out further, so the line stays o metres from both stretches that meet there
+    const ix = p[i * 2] - p[a * 2], iz = p[i * 2 + 1] - p[a * 2 + 1], il = Math.hypot(ix, iz);
+    const mitre = il > 1e-6 ? Math.min(2, 1 / Math.max(0.5, Math.abs((ix * dx + iz * dz) / (il * len)))) : 1;
+    out.push([p[i * 2] - dz / len * o * mitre, p[i * 2 + 1] + dx / len * o * mitre]);
   }
   return out;
 }
@@ -232,7 +235,7 @@ export function buildLaneGraph(map, net) {
   const connect = (j, arm, from, to, turn) => {
     const p0 = from.pts.at(-1), p3 = to.pts[0], d0 = unit(from.pts.at(-2), p0), d3 = unit(p3, to.pts[1]);
     const pts = curve(p0, d0, p3, d3, turn === 'S' ? 0.33 : turn === 'U' ? 0.7 : 0.42);
-    const move = { id: moves.length, junction: j, arm, from, to, turn, pts, len: lengthOf(pts), conflicts: [], opposed: false, yields: false, priority: 3 };
+    const move = { id: moves.length, junction: j, arm, from, to, turn, pts, len: lengthOf(pts), conflicts: [], wide: [], opposed: false, yields: false, priority: 3 };
     moves.push(move);
     j.moves.push(move);
     from.out.push(move);
@@ -275,8 +278,12 @@ export function buildLaneGraph(map, net) {
     for (let a = 0; a < j.moves.length; a++) {
       for (let b = a + 1; b < j.moves.length; b++) {
         const m = j.moves[a], o = j.moves[b];
-        if (m.from === o.from || m.arm === o.arm && m.to !== o.to) continue;
+        if (m.from === o.from) continue;
+        // side by side from one road into different lanes: in each other's way only if the two curves all but touch
+        if (m.arm === o.arm && m.to !== o.to) { if (tooClose(m.pts, o.pts, 1.5)) { m.conflicts.push(o); o.conflicts.push(m); } continue; }
         if (m.to === o.to || tooClose(m.pts, o.pts, 1.5)) { m.conflicts.push(o); o.conflicts.push(m); }
+        // a bus swings wide of its line: the movements it would brush as well
+        if (m.to === o.to || tooClose(m.pts, o.pts, 3.2)) { m.wide.push(o); o.wide.push(m); }
       }
     }
   }

@@ -15,7 +15,8 @@ npm run dev
 
 ## 출처
 
-- 지도: © OpenStreetMap contributors (ODbL). 일부 건물은 지도에 없어 추정으로 채웠습니다.
+- 지도: © OpenStreetMap contributors (ODbL).
+- 건물 윤곽과 높이: 국토교통부 GIS건물통합정보 (브이월드). 내려받으려면 본인의 인증키가 필요합니다: `VWORLD_KEY=<키> node tools/fetch-buildings.mjs` 후 `node tools/build-map.mjs`.
 - 고도: Mapzen Terrarium 타일 (AWS Open Data)
 - 인물 모델: Quaternius (quaternius.com), CC0 1.0
 - 음악: Kevin MacLeod (incompetech.com), CC BY 4.0

@@ -60,8 +60,10 @@ export function createTraffic(graph, options = {}) {
   const chooseNext = (car, lane) => {
     const list = lane.out;
     if (!list.length) return null;
-    let roll = rand() * list.reduce((s, m) => s + PICK[m.turn] * (car.kind.major && m.turn !== 'S' ? 0.4 : 1), 0);
-    for (const m of list) { roll -= PICK[m.turn] * (car.kind.major && m.turn !== 'S' ? 0.4 : 1); if (roll <= 0) return m; }
+    // a bus keeps straight on where it can: its route follows the main road, and it is too long for the tight corners
+    const straight = car.kind.major && list.some(m => m.turn === 'S'), liking = m => (straight && m.turn !== 'S' ? 0 : PICK[m.turn]);
+    let roll = rand() * list.reduce((s, m) => s + liking(m), 0);
+    for (const m of list) { if (!liking(m)) continue; roll -= liking(m); if (roll <= 0) return m; }
     return list.at(-1);
   };
 
@@ -75,29 +77,38 @@ export function createTraffic(graph, options = {}) {
     car.beyond = [];
     for (let m = car.next, n = 0; m && passing(car, m.to) && n < 8; n++) {
       m = chooseNext(car, m.to);
+      if (m && m.junction.control === 'signal') break;      // the lights ahead are obeyed when it gets there, not booked in advance
       if (m) car.beyond.push(m);
     }
   };
-  const release = (car, move) => { const at = car.held.indexOf(move); if (at >= 0) { car.held.splice(at, 1); move.held--; } };
+  // Taking and giving back leave to cross. A long vehicle also keeps others off the movements beside its own.
+  const long = car => car.len > 7;
+  const hold = (car, move) => { car.held.push(move); move.held++; };
+  const release = (car, move) => {
+    const at = car.held.indexOf(move);
+    if (at < 0) return;
+    car.held.splice(at, 1);
+    move.held--;
+  };
 
   function remove(car) {
     const at = car.path.cars.indexOf(car);
     if (at >= 0) car.path.cars.splice(at, 1);
-    for (const m of car.held) m.held--;
-    car.held.length = 0;
+    for (const m of [...car.held]) release(car, m);
     cars.splice(cars.indexOf(car), 1);
   }
 
   // May this car start across the junction now? Through a knot, every movement on the way must be free.
   function clear(car, move, toLine) {
-    if (!free(car, move, toLine)) return false;
+    if (!free(car, move, toLine, false, car.beyond.length > 0)) return false;
     for (const m of car.beyond) {
       if (m.from.cars.length || m.from.into.some(i => i.held > 0)) { car.why = 'full'; return false; }
-      if (!free(car, m, Infinity, true)) return false;
     }
+    for (let i = 0; i < car.beyond.length; i++) if (!free(car, car.beyond[i], Infinity, true, i < car.beyond.length - 1)) return false;
     return true;
   }
-  function free(car, move, toLine, later = false) {
+  // onward: the car has leave planned beyond the lane this movement ends in, so it need not fit there
+  function free(car, move, toLine, later = false, onward = false) {
     const j = move.junction, arm = move.arm, signalled = j.control === 'signal';
     const lampOf = m => signalOf(j).arms[m.arm.id][m.turn === 'L' ? 'left' : 'through'];
     if (signalled) {
@@ -112,9 +123,13 @@ export function createTraffic(graph, options = {}) {
     let room = to.len, tail = null;
     for (const c of to.cars) if (c.s - c.len / 2 < room) { room = c.s - c.len / 2; tail = c; }
     for (const m of to.into) room -= m.held * (car.len + STANDSTILL);
-    if (room < car.len + 1.5 && !passing(car, to)) { car.why = tail && tail.v < 0.3 && tail.why || 'full'; return false; }
-    for (const o of move.conflicts) {
+    // a lane too short for the car is entered only when it is empty
+    if (room < Math.min(car.len + 1.5, to.len - 0.01) && !(onward && passing(car, to))) { car.why = tail && tail.v < 0.3 && tail.why || 'full'; return false; }
+    // a bus is swinging past on a movement beside this one (one standing in a queue is no danger)
+    if (!long(car) && move.wide.some(o => o.cars.some(c => long(c) && c.v > 0.3))) { car.why = 'crossing'; return false; }
+    for (const o of long(car) ? move.wide : move.conflicts) {
       if (o.held > 0) { car.why = 'crossing'; return false; }
+      if (!move.conflicts.includes(o)) continue;
       // give way to traffic that comes first and is about to arrive
       const first = signalled ? move.yields && !o.yields && lampOf(o) === 'G' : o.priority > move.priority;
       if (!first) continue;
@@ -159,9 +174,15 @@ export function createTraffic(graph, options = {}) {
       v0 = Math.min(v0, Math.sqrt(move.speed * move.speed + 2 * 1.4 * Math.max(0, toLine)));          // slow for the bend ahead
       if (move.arm.give === 'equal' && toLine < 14) v0 = Math.min(v0, 4);
       if (move.arm.give === 'stop' && toLine < 1.5 && car.v < 0.3) car.halted = true;
+      // leave to cross lapses if the lights have gone red since and there is still room to stop
+      if (car.holds && move.junction.control === 'signal' && car.v * car.v / (2 * HARD) < toLine - 0.5
+        && signalOf(move.junction).arms[move.arm.id][move.turn === 'L' ? 'left' : 'through'] === 'R') {
+        for (const m of [...car.held]) release(car, m);
+        car.holds = null;
+      }
       if (!car.holds && toLine < car.v * car.v / (2 * BRAKE) + 6) {
         if (clear(car, move, toLine)) {
-          for (const m of [move, ...car.beyond]) { car.held.push(m); m.held++; }
+          for (const m of [move, ...car.beyond]) hold(car, m);
           car.holds = move;
           car.heldAt = time;
         } else see(toLine - 0.4 + STANDSTILL, 0);
@@ -206,7 +227,9 @@ export function createTraffic(graph, options = {}) {
         for (const c of others || []) {
           if (c.path === on) continue;
           // a long vehicle swings wide of its line in a bend, so it keeps further from what stands beside it
-          const reach = (c.kind.wid + car.kind.wid) / 2 * 0.8 + (car.len > 7 && onMove ? 0.7 : 0), span = c.len / 2 - c.kind.wid / 2;
+          // turning, a car's tail cuts inside its line and a long vehicle's more so: it keeps further from what stands beside it
+          const turning = onMove && path.turn !== 'S';
+          const reach = (c.kind.wid + car.kind.wid) / 2 * 0.8 + (car.len > 7 && turning ? 0.7 : 0), span = c.len / 2 - c.kind.wid / 2;
           for (const k of [-1, 0, 1]) {
             if (Math.hypot(c.x + c.ux * span * k - pose.x, c.z + c.uz * span * k - pose.z) < reach) {
               see(d - car.len / 2 - 0.9, Math.max(0, c.v * (c.ux * car.ux + c.uz * car.uz)), 'insight', c);
@@ -269,9 +292,15 @@ export function createTraffic(graph, options = {}) {
     car.x = pose.x;
     car.z = pose.z;
     // the body swings round gradually rather than snapping from one stretch of the path to the next
-    if (pose.ux || pose.uz) {
-      const k = Math.min(1, dt * (2 + car.v));
-      const ux = car.ux + (pose.ux - car.ux) * k, uz = car.uz + (pose.uz - car.uz) * k, l = Math.hypot(ux, uz);
+    // The body lies along the line from where its rear axle is on the path to where its front axle is,
+    // so it follows a bend the way a car does instead of swinging its nose wide.
+    const reach = car.len * 0.3, on = car.path;
+    poseAt(on, Math.max(0, car.s - reach), pose);
+    const rx = pose.x, rz = pose.z;
+    poseAt(on, Math.min(on.len, car.s + reach), pose);
+    const fx = pose.x - rx, fz = pose.z - rz, span = Math.hypot(fx, fz);
+    if (span > 0.2) {
+      const k = Math.min(1, dt * 10), ux = car.ux + (fx / span - car.ux) * k, uz = car.uz + (fz / span - car.uz) * k, l = Math.hypot(ux, uz);
       if (l > 1e-6) { car.ux = ux / l; car.uz = uz / l; }
     }
     return true;

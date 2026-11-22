@@ -16,6 +16,7 @@ const CELL = 60;          // collision and road lookup grid, metres
 const EDGE_MARGIN = 6;    // invisible wall this far inside the edge of the map data
 const TALL = 30;          // buildings at least this high are drawn from far away
 const NEAR = 620;         // a zone gets its full detail when the car is this close (metres to its nearest edge)
+const LOW = 430;          // low buildings are shown only this close: further off, the ones in front hide them
 const FAR = 1900;         // and its ground, roads and tall buildings from this far
 
 // Everything the game needs from the map: the scene content, ground height, collisions and road lookup.
@@ -218,7 +219,8 @@ export async function createWorld(dir) {
     zone.outlines = d.b.map(b => b.p).concat(d.nb);
     const streets = buildStreets(ctx, zone);
     if (streets.parked.length) streets.group.add(trafficKit.parkedMesh(streets.parked, ground));
-    group.add(streets.group, buildFacades(d.b.filter(b => b.h < TALL), ground, facadeKit, zone.seed + 1000));
+    zone.low = buildFacades(d.b.filter(b => b.h < TALL), ground, facadeKit, zone.seed + 1000);
+    group.add(streets.group, zone.low);
     for (const b of d.b) addSolid(b.p);
     // poles and tree trunks: circles, kept in the same grid
     for (const post of streets.posts) bucket(cells, cellOf(post.x), cellOf(post.z)).push({ ...post, seen: 0 });
@@ -247,6 +249,7 @@ export async function createWorld(dir) {
     pending = 0;
     for (const zone of zones) {
       const d = gap(zone, x, z), want = d < NEAR ? 2 : d < FAR ? 1 : 0;
+      if (zone.low) zone.low.visible = d < LOW;
       if (zone.level >= want) continue;
       pending++;
       fetchZone(zone);

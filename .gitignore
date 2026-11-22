@@ -2,3 +2,4 @@ node_modules
 dist
 .playwright-mcp
 .omc
+data/raw/vworld-buildings.json

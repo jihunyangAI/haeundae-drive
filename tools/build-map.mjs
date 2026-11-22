@@ -112,11 +112,93 @@ function addBuilding(tags, geometry) {
   if (lv > 0) b.lv = lv;
   buildings.push(b);
 }
-for (const e of osm) {
-  const t = e.tags || {};
-  if (!t.building && !t['building:part']) continue;
-  if (e.type === 'way') addBuilding(t, e.geometry);
-  else for (const m of e.members) if (m.role === 'outer' && m.geometry) addBuilding(t, m.geometry);
+// The official building register (see tools/fetch-buildings.mjs), when it has been downloaded, replaces
+// the OpenStreetMap buildings: it has every building, where OpenStreetMap has about a fifth of them.
+const register = await readFile(new URL('vworld-buildings.json', RAW), 'utf8').then(JSON.parse, () => null);
+// what a building is, from the first two digits of its registered use
+const USE = { '01': 'house', '02': 'apartments', '03': 'retail', '04': 'retail', '07': 'retail', '16': 'retail', '09': 'hospital', '10': 'school', '14': 'office', '15': 'hotel' };
+if (register) {
+  for (const { g, p: tags } of register.buildings) {
+    for (const outline of g) {
+      const pts = outline.map(([lon, lat]) => toLocal(lat, lon).map(r2));
+      if (pts.length > 3 && pts[0][0] === pts.at(-1)[0] && pts[0][1] === pts.at(-1)[1]) pts.pop();
+      if (pts.length < 3) continue;
+      const p = flat(pts), [cx, cz] = centroid(p);
+      let area = 0;
+      for (let i = 0; i < pts.length; i++) { const q = pts[(i + 1) % pts.length]; area += pts[i][0] * q[1] - q[0] * pts[i][1]; }
+      area = Math.abs(area) / 2;
+      if (!inside(cx, cz) || area < 22) continue;                 // sheds and porches are left out
+      const floors = Number.parseInt(tags.grnd_flr, 10) || 0, height = Number.parseFloat(tags.height) || 0;
+      let type = USE[String(tags.usability || '').slice(0, 2)] || 'yes';
+      if (type === 'apartments' && floors > 0 && floors < 5) type = 'house';
+      const b = { t: type, n: tags.dong_nm || tags.bld_nm || '', p };
+      if (height > 2) Object.assign(b, { h: r2(height), hs: 'h' });
+      else if (floors > 0) Object.assign(b, { h: r2(floors * (LEVEL_H[type] || 3.2) + 1), hs: 'lv' });
+      // nothing registered: a small footprint is a house or a lock-up, a larger one a low block
+      else Object.assign(b, { h: area < 60 ? 4 : area < 200 ? 7.5 : 10.5, hs: 'est' });
+      if (floors > 0) b.lv = floors;
+      buildings.push(b);
+    }
+  }
+} else {
+  for (const e of osm) {
+    const t = e.tags || {};
+    if (!t.building && !t['building:part']) continue;
+    if (e.type === 'way') addBuilding(t, e.geometry);
+    else for (const m of e.members) if (m.role === 'outer' && m.geometry) addBuilding(t, m.geometry);
+  }
+}
+
+// ---------- streets and buildings made to fit each other ----------
+// Street widths are guesses from the class of road, and the back streets of Haeundae are narrower than
+// the guess: the registered buildings would stand in the carriageway. Where buildings close in on an
+// untagged side street it becomes a single shared lane; a building still in the way after that is left out.
+if (register) {
+  const CELL_M = 30, grid = new Map(), SIDE = /^(residential|living_street|unclassified)$/;
+  for (const road of roads) {
+    if (road.c !== 'drive' || road.br || road.tn || road.k === 'service' || road.k === 'busway') continue;
+    road.clear = Infinity;                                     // nearest building wall to the centre line, metres
+    const pad = road.w / 2 + 2;
+    for (let i = 2; i < road.p.length; i += 2) {
+      const seg = { road, ax: road.p[i - 2], az: road.p[i - 1], bx: road.p[i], bz: road.p[i + 1] };
+      for (let cx = Math.floor((Math.min(seg.ax, seg.bx) - pad) / CELL_M); cx <= Math.floor((Math.max(seg.ax, seg.bx) + pad) / CELL_M); cx++) {
+        for (let cz = Math.floor((Math.min(seg.az, seg.bz) - pad) / CELL_M); cz <= Math.floor((Math.max(seg.az, seg.bz) + pad) / CELL_M); cz++) {
+          const key = `${cx},${cz}`;
+          if (!grid.has(key)) grid.set(key, []);
+          grid.get(key).push(seg);
+        }
+      }
+    }
+  }
+  const reach = (seg, x, z) => {
+    const dx = seg.bx - seg.ax, dz = seg.bz - seg.az, t = Math.max(0, Math.min(1, ((x - seg.ax) * dx + (z - seg.az) * dz) / (dx * dx + dz * dz || 1)));
+    return Math.hypot(x - seg.ax - dx * t, z - seg.az - dz * t);
+  };
+  // every couple of metres along a building's walls: the streets near that point and how far off they are
+  const near = (b, visit) => {
+    const p = b.p, n = p.length / 2;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n, ex = p[j * 2] - p[i * 2], ez = p[j * 2 + 1] - p[i * 2 + 1], steps = Math.max(1, Math.ceil(Math.hypot(ex, ez) / 2));
+      for (let k = 0; k < steps; k++) {
+        const x = p[i * 2] + ex * k / steps, z = p[i * 2 + 1] + ez * k / steps;
+        for (const seg of grid.get(`${Math.floor(x / CELL_M)},${Math.floor(z / CELL_M)}`) || []) visit(seg.road, reach(seg, x, z));
+      }
+    }
+  };
+  for (const b of buildings) near(b, (road, d) => { if (d > 1.2) road.clear = Math.min(road.clear, d); });
+  let narrowed = 0;
+  for (const road of roads) {
+    if (road.clear === undefined) continue;
+    if (SIDE.test(road.k) && road.ls === 'def' && road.ln > 1 && road.clear < road.w / 2 + 0.3) { road.ln = 1; road.w = 4; narrowed++; }
+    delete road.clear;
+  }
+  const before = buildings.length, beside = {};
+  for (let i = buildings.length - 1; i >= 0; i--) {
+    let inRoad = null;
+    near(buildings[i], (road, d) => { if (d < road.w / 2 + 0.3) inRoad = road.k; });
+    if (inRoad) { buildings.splice(i, 1); beside[inRoad] = (beside[inRoad] || 0) + 1; }
+  }
+  console.log(`side streets narrowed to one lane: ${narrowed}; buildings left out because they stand in a street: ${before - buildings.length} ${JSON.stringify(beside)}`);
 }
 
 // ---------- areas and lines ----------
@@ -406,7 +488,7 @@ function addFillers() {
   }
   return count;
 }
-const mapped = buildings.length, fillers = addFillers();
+const mapped = buildings.length, fillers = register ? 0 : addFillers();       // with the register there is nothing to fill in
 
 // ---------- zones ----------
 // A zone file lists everything that touches the zone, whole. What each zone draws is decided in the
@@ -474,7 +556,7 @@ const base = {
   meta: {
     id: REGION.id, name: REGION.name, center: { lat: REGION.lat, lon: REGION.lon }, mPerLat, mPerLon,
     rect: [X0, Z0, X1, Z1], zone: ZONE, cols: COLS, rows: ROWS,
-    attribution: '지도 데이터 © OpenStreetMap 기여자 (ODbL) · 고도 데이터: Mapzen Terrain Tiles',
+    attribution: `지도 데이터 © OpenStreetMap 기여자 (ODbL)${register ? ' · 건물: 국토교통부 GIS건물통합정보 (브이월드)' : ''} · 고도 데이터: Mapzen Terrain Tiles`,
   },
   height: { nx: NX, nz: NZ, cell: CELL, x0: X0, z0: Z0, smooth },
   mask: { nx: MX, nz: MZ, cell: FINE, runs },
