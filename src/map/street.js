@@ -1,16 +1,24 @@
 import * as THREE from 'three';
 import { limitOf } from './network.js';
-import { ribbonMesh, LAYER } from './meshes.js';
+import { ribbonMesh, paintMesh, LAYER } from './meshes.js';
+import { laneSplit } from './lanes.js';
 import { pointInPolygon, boundsOf } from './data.js';
 import { QuadBatch, FONT, seeded } from './atlas.js';
 import { snowable } from './shared.js';
 
-const SIGNALISED = /^(trunk|primary|secondary|tertiary)$/;
 const KERBED = /^(trunk|primary|secondary|tertiary|residential|unclassified|living_street)$/;
-const JUNCTION_CLEAR = 6;      // markings stop this far short of the crossing street's edge
 const SIDEWALK_W = 3;
-const CYCLE = 46, GREEN = 20, AMBER = 3;   // signal timing, seconds
-const LAMP_COLOURS = { red: 0xff2a1a, amber: 0xffb000, green: 0x18e07a };
+export const LAMP_COLOURS = { red: 0xff2a1a, amber: 0xffb000, green: 0x18e07a, arrow: 0x18e07a };
+
+// Road arrows, in metres: x to the right of travel, y along it. Each is a few convex pieces.
+const SHAFT = y1 => [[-0.08, 0], [0.08, 0], [0.08, y1], [-0.08, y1]];
+const AHEAD = [SHAFT(2.7), [[-0.36, 2.7], [0.36, 2.7], [0, 4.2]]];
+const BRANCH = (y, side) => [[[0, y - 0.08], [side * 0.95, y - 0.08], [side * 0.95, y + 0.08], [0, y + 0.08]], [[side * 0.95, y - 0.42], [side * 0.95, y + 0.42], [side * 1.85, y]]];
+const ARROWS = {
+  S: AHEAD, L: [SHAFT(2.3), ...BRANCH(2.22, -1)], R: [SHAFT(2.3), ...BRANCH(2.22, 1)],
+  LS: [...AHEAD, ...BRANCH(1.4, -1)], RS: [...AHEAD, ...BRANCH(1.4, 1)],
+  LR: [SHAFT(2.3), ...BRANCH(2.22, -1), ...BRANCH(2.22, 1)], LRS: [...AHEAD, ...BRANCH(1.4, -1), ...BRANCH(1.4, 1)],
+};
 
 // Materials and shapes shared by the street furniture of every zone.
 // update(time) runs the signals; lampGlow, pools, halos and signs are driven by the time of day.
@@ -18,19 +26,17 @@ export function createStreetKit(atlas) {
   const metal = new THREE.MeshStandardMaterial({ color: 0x5b6067, roughness: 0.6, metalness: 0.5 });
   const dark = new THREE.MeshStandardMaterial({ color: 0x1c1e21, roughness: 0.7 });
   const lampGlow = new THREE.MeshStandardMaterial({ color: 0xdedede, emissive: 0xffe2b0, emissiveIntensity: 0 });
+  // signal lamps: each one's colour is set as its junction's programme runs (see world.js)
+  const signalLamp = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  const arrow = new THREE.Shape([[0.9, -0.22], [0.9, 0.22], [-0.1, 0.22], [-0.1, 0.62], [-1, 0], [-0.1, -0.62], [-0.1, -0.22]].map(p => new THREE.Vector2(...p)));
   const cylinder = new THREE.CylinderGeometry(1, 1, 1, 8), box = new THREE.BoxGeometry(1, 1, 1);
   const kinds = {
     pole: [cylinder, metal], box: [box, dark], lampHead: [box, lampGlow],
     trunk: [new THREE.CylinderGeometry(0.8, 1, 1, 6), new THREE.MeshStandardMaterial({ color: 0x4b3a2b, roughness: 0.9 })],
     crown: [new THREE.IcosahedronGeometry(1, 1), snowable(new THREE.MeshStandardMaterial({ roughness: 0.9, flatShading: true }), 0.6)],
   };
-  const lampMats = {}, disc = new THREE.CircleGeometry(1, 16);
-  for (const colour of Object.keys(LAMP_COLOURS)) {
-    for (const phase of [0, 1]) {
-      lampMats[colour + phase] = new THREE.MeshStandardMaterial({ color: 0x151515, emissive: LAMP_COLOURS[colour], emissiveIntensity: 0 });
-      kinds[colour + phase] = [disc, lampMats[colour + phase]];
-    }
-  }
+  kinds.lamp = [new THREE.CircleGeometry(1, 16), signalLamp];
+  kinds.arrowLamp = [new THREE.ShapeGeometry(arrow), signalLamp];
 
   // Pool of light on the ground under each lamp: a glowing disc laid along the slope. Cheaper than a
   // real light per lamp, and enough to read as a lit street.
@@ -56,16 +62,17 @@ export function createStreetKit(atlas) {
     map: atlas.texture, alphaTest: 0.5, roughness: 0.6, emissiveMap: atlas.texture, emissive: 0xffffff, emissiveIntensity: 0,
   });
 
-  // Opposite phases for the two crossing directions: green, amber, then red while the other runs.
-  function update(time) {
-    for (const phase of [0, 1]) {
-      const t = (time + phase * CYCLE / 2) % CYCLE;
-      const on = t < GREEN ? 'green' : t < GREEN + AMBER ? 'amber' : 'red';
-      for (const colour of Object.keys(LAMP_COLOURS)) lampMats[colour + phase].emissiveIntensity = colour === on ? 4 : 0.04;
-    }
+  return { kinds, lampGlow, pools, halos, signs, poolShape: new THREE.CircleGeometry(17, 24).rotateX(-Math.PI / 2) };
+}
+
+// The point `back` metres before the end of a lane, and the direction of travel there.
+function pointBack(pts, back) {
+  for (let i = pts.length - 1; i > 0; i--) {
+    const dx = pts[i][0] - pts[i - 1][0], dz = pts[i][1] - pts[i - 1][1], len = Math.hypot(dx, dz) || 1;
+    if (back <= len || i === 1) return [[pts[i][0] - dx / len * back, pts[i][1] - dz / len * back], [dx / len, dz / len]];
+    back -= len;
   }
-  update(0);
-  return { kinds, lampGlow, pools, halos, signs, poolShape: new THREE.CircleGeometry(17, 24).rotateX(-Math.PI / 2), update };
+  return [pts[0], [0, 1]];
 }
 
 // Road paint, kerbs, signals, lamps, signs and trees for one zone.
@@ -73,19 +80,32 @@ export function createStreetKit(atlas) {
 // road of that kind ('drive' or 'any') lies within `margin` metres of its edge.
 // zone: { owns, streets, outlines, areas, lines, seed, x0, z0, x1, z1 }.
 // Streets are worked out whole and each zone keeps what falls inside it, so zones agree at their edges.
-// Returns { group, posts, lamps, decals } - posts are the solid poles and trunks.
+// Returns { group, posts, lamps, decals, signals } - posts are the solid poles and trunks; signals are
+// the lamps of the signal heads, { mesh, i, arm, role }, for the world to switch on and off.
 export function buildStreets(ctx, zone) {
   const { map, ground, atlas, kit, nearRoad } = ctx, { owns } = zone, rand = seeded(7 + zone.seed);
   const white = [], yellow = [], sidewalks = [], posts = [], lamps = [];
   const signs = new QuadBatch(atlas);
   const inst = {};
   const dummy = new THREE.Object3D();
-  const put = (name, x, y, z, heading, sx, sy, sz, color) => {
+  const put = (name, x, y, z, heading, sx, sy, sz, color, lamp) => {
     dummy.position.set(x, y, z);
     dummy.rotation.set(0, heading, 0);
     dummy.scale.set(sx, sy, sz);
     dummy.updateMatrix();
-    (inst[name] ||= []).push({ m: dummy.matrix.clone(), color });
+    (inst[name] ||= []).push({ m: dummy.matrix.clone(), color, lamp });
+  };
+  const arrowPos = [], arrowIdx = [], signals = [], dim = new THREE.Color(0x0a0a0a);
+  // paint an arrow on the road at frame f for the turns a lane allows, e.g. 'LS'
+  const roadArrow = (f, turns) => {
+    for (const piece of ARROWS[turns] || ARROWS.S) {
+      const base = arrowPos.length / 3;
+      for (const [px, py] of piece) {
+        const x = f.x - f.uz * px + f.ux * py, z = f.z + f.ux * px + f.uz * py;
+        arrowPos.push(x, ground(x, z) + LAYER.mark, z);
+      }
+      for (let k = 2; k < piece.length; k++) arrowIdx.push(base, base + k - 1, base + k);
+    }
   };
   // A spot beside the street: `right` metres to the right of travel and `ahead` metres along it.
   const beside = (f, right, ahead = 0) => {
@@ -135,19 +155,21 @@ export function buildStreets(ctx, zone) {
 
   // Signal head on a mast arm for the lanes that approach along frame f (taken at the stop line).
   // It stands `ahead` metres on, across the junction, where a waiting driver can see it.
-  function signal(f, half, armLen, ahead) {
-    const heading = Math.atan2(f.ux, f.uz), phase = Math.abs(Math.round(heading / (Math.PI / 2))) % 2;
+  // arm: the approach it controls (see lanes.js); a fourth lamp shows the left-turn arrow if it has one.
+  function signal(f, half, armLen, ahead, arm) {
+    const heading = Math.atan2(f.ux, f.uz);
     const base = beside(f, half + 0.9, ahead), y = base.y;
     if (!owns(base.x, base.z) || blocked(base, f.road) || inBuilding(base.x, base.z)) return;
     put('pole', base.x, y + 3.2, base.z, 0, 0.1, 6.4, 0.1);
     posts.push({ x: base.x, z: base.z, r: 0.2 });
-    const arm = beside(f, half + 0.9 - armLen / 2, ahead), head = beside(f, half + 0.9 - armLen + 0.9, ahead);
-    put('box', arm.x, y + 6.2, arm.z, heading, armLen, 0.12, 0.12);
-    put('box', head.x, y + 6.15, head.z, heading, 1.5, 0.46, 0.26);
-    // seen by the driver, left to right: red, amber, green
-    [['red', -0.47], ['amber', 0], ['green', 0.47]].forEach(([colour, shift]) => {
-      const lamp = beside(f, half + 0.9 - armLen + 0.9 + shift, ahead - 0.14);
-      put(`${colour}${phase}`, lamp.x, y + 6.15, lamp.z, heading + Math.PI, 0.16, 0.16, 1);
+    const boom = beside(f, half + 0.9 - armLen / 2, ahead), head = beside(f, half + 0.9 - armLen + 0.9, ahead);
+    put('box', boom.x, y + 6.2, boom.z, heading, armLen, 0.12, 0.12);
+    // seen by the driver, left to right: red, amber, (left arrow,) green
+    const roles = arm.arrow ? ['red', 'amber', 'arrow', 'green'] : ['red', 'amber', 'green'], width = roles.length * 0.47 + 0.1;
+    put('box', head.x, y + 6.15, head.z, heading, width, 0.46, 0.26);
+    roles.forEach((role, k) => {
+      const lamp = beside(f, half + 0.9 - armLen + 0.9 + (k - (roles.length - 1) / 2) * 0.47, ahead - 0.14);
+      put(role === 'arrow' ? 'arrowLamp' : 'lamp', lamp.x, y + 6.15, lamp.z, heading + Math.PI, 0.16, 0.16, 1, dim, { arm, role });
     });
   }
 
@@ -159,41 +181,65 @@ export function buildStreets(ctx, zone) {
   const ownsAt = f => owns(f.x, f.z);
 
   for (const st of zone.streets) {
-    const r = st.road, ln = r.ln, half = r.w / 2, laneW = (r.w - 1) / ln, twoWay = !r.ow;
+    const r = st.road, ln = r.ln, half = r.w / 2, laneW = (r.w - 1) / ln, twoWay = !r.ow, centre = laneSplit(r)[1];
     const reverse = f => ({ x: f.x, z: f.z, ux: -f.ux, uz: -f.uz });
 
     // ---------- paint ----------
-    for (const iv of st.intervals(c => c.half + JUNCTION_CLEAR)) {
-      if (!touches(st, iv.s0, iv.s1, half + 60)) continue;
+    for (const iv of st.links) {
+      if (iv.internal || !touches(st, iv.s0, iv.s1, half + 60)) continue;
+      const [startArm, endArm] = iv.ends, atJunction = arm => arm.junction.arms.length >= 3;
       const p = st.slice(iv.s0, iv.s1);
       white.push({ p, w: 0.15, o: half - 0.35 }, { p, w: 0.15, o: -(half - 0.35) });
       for (let k = 1; k < ln; k++) {
         const o = (k - ln / 2) * laneW;
-        if (twoWay && k === ln / 2) {
-          if (ln >= 4) yellow.push({ p, w: 0.15, o: -0.17 }, { p, w: 0.15, o: 0.17 });
-          else yellow.push({ p, w: 0.15, o: 0 });
+        if (twoWay && ln > 1 && k === centre) {
+          if (ln >= 4) yellow.push({ p, w: 0.15, o: o - 0.17 }, { p, w: 0.15, o: o + 0.17 });
+          else yellow.push({ p, w: 0.15, o });
         } else {
           for (let s = iv.s0 + 1; s + 3 <= iv.s1; s += 8) if (ownsAt(st.at(s + 1.5))) white.push({ p: st.slice(s, s + 3), w: 0.15, o, whole: true });
         }
       }
       // stop line and zebra crossing where the stretch meets a junction
       // dir: +1 when the junction lies ahead of s, -1 behind. stop: the lanes that have to wait here.
-      const approach = (s, dir, stop) => {
+      // deep: how far the zebra crossing reaches towards the junction
+      const approach = (s, dir, stop, deep) => {
         if (!ownsAt(st.at(s))) return;
         if (stop) white.push({ p: st.slice(Math.min(s, s - dir * 0.45), Math.max(s, s - dir * 0.45)), ...stop, whole: true });
         for (let x = -half + 0.7; x <= half - 0.7; x += 1) {
-          white.push({ p: st.slice(Math.min(s + dir, s + dir * 4.5), Math.max(s + dir, s + dir * 4.5)), w: 0.5, o: x, whole: true });
+          white.push({ p: st.slice(Math.min(s + dir, s + dir * deep), Math.max(s + dir, s + dir * deep)), w: 0.5, o: x, whole: true });
         }
       };
-      if (iv.endJ) approach(iv.s1, 1, twoWay ? { o: half / 2, w: half - 0.5 } : { o: 0, w: r.w - 1 });
-      if (iv.startJ) approach(iv.s0, -1, twoWay ? { o: -half / 2, w: half - 0.5 } : null);
+      // a stop line only where the approach has to wait: at signals, and where it meets a bigger street
+      const waits = arm => arm.entries.length && (arm.give === 'signal' || arm.give === 'stop');
+      // the stop line spans the lanes of its own direction, from the centre line to the kerb
+      const divide = twoWay && ln > 1 ? (centre - ln / 2) * laneW : 0;
+      const line = dir => (!twoWay ? (dir > 0 ? { o: 0, w: r.w - 1 } : null) : ln === 1 ? { o: dir * half / 2, w: half - 0.5 }
+        : { o: (divide + dir * half) / 2, w: half - dir * divide - 0.5 });
+      for (const [arm, s, dir] of [[endArm, iv.s1, 1], [startArm, iv.s0, -1]]) {
+        if (!atJunction(arm)) continue;
+        if (arm.crossing) approach(s, dir, waits(arm) ? line(dir) : null, Math.min(4.5, iv.clear[dir > 0 ? 1 : 0] - 0.5));
+        else if (waits(arm) && line(dir) && ownsAt(st.at(s))) white.push({ p: st.slice(Math.min(s, s - dir * 0.45), Math.max(s, s - dir * 0.45)), ...line(dir), whole: true });
+      }
 
-      // signals where two through streets meet
-      const lit = cut => cut && SIGNALISED.test(r.k) && cut.junction.roads.filter(o => SIGNALISED.test(o.k)).length >= 2
-        && cut.junction.roads.some(o => o.n !== r.n);
-      const across = cut => 2 * (cut.half + JUNCTION_CLEAR) - 1.5;
-      if (lit(iv.endJ)) signal({ ...st.at(iv.s1), road: r }, half, twoWay ? half * 0.9 : r.w * 0.8, across(iv.endJ));
-      if (twoWay && lit(iv.startJ)) signal({ ...reverse(st.at(iv.s0)), road: r }, half, half * 0.9, across(iv.startJ));
+      // signal heads, on the far side of the junction
+      for (const [arm, s, dir] of [[endArm, iv.s1, 1], [startArm, iv.s0, -1]]) {
+        if (arm.give !== 'signal') continue;
+        const f = dir > 0 ? st.at(s) : reverse(st.at(s)), on = arm.entries[0].out.find(m => m.turn === 'S') || arm.entries.at(-1).out[0];
+        const far = on ? Math.hypot(on.pts.at(-1)[0] - f.x, on.pts.at(-1)[1] - f.z) : 2 * iv.pads[dir > 0 ? 1 : 0];
+        signal({ ...f, road: r }, half, twoWay ? half * 0.9 : r.w * 0.8, Math.max(8, far - 1.5), arm);
+      }
+
+      // arrows before the junction, lane by lane, where there is a choice of lanes or a signal
+      for (const arm of [endArm, startArm]) {
+        if (!atJunction(arm) || !(arm.entries.length >= 2 || arm.give === 'signal')) continue;
+        for (const lane of arm.entries) {
+          const turns = [...new Set(lane.out.map(m => m.turn))].sort().join('');
+          for (const back of lane.len > 70 ? [9, 34] : lane.len > 26 ? [9] : []) {
+            const [a, b] = pointBack(lane.pts, back);
+            if (owns(a[0], a[1])) roadArrow({ x: a[0], z: a[1], ux: b[0], uz: b[1] }, turns);
+          }
+        }
+      }
 
       // speed limit signs facing each direction of travel
       if (iv.s1 - iv.s0 >= 70) {
@@ -207,7 +253,7 @@ export function buildStreets(ctx, zone) {
         }
       }
       // street name plate at the start of each stretch
-      if (r.n && iv.startJ) {
+      if (r.n && atJunction(startArm)) {
         const f = st.at(iv.s0 + 3), at = beside(f, half + 1.3);
         if (owns(at.x, at.z) && !blocked(at, r)) {
           put('pole', at.x, at.y + 1.8, at.z, 0, 0.05, 3.6, 0.05);
@@ -280,7 +326,7 @@ export function buildStreets(ctx, zone) {
     ribbonMesh(items.filter(i => !i.whole), color, paintY, 5, { owns }), ribbonMesh(items.filter(i => i.whole), color, paintY, 5),
   ];
   const walk = ribbonMesh(sidewalks, 0xb9b6ae, (x, z) => ground(x, z) + LAYER.sidewalk, 4, { snow: 0.85, owns });
-  group.add(walk, ...split(white, 0xe8e8e2), ...split(yellow, 0xe0b62e));
+  group.add(walk, ...split(white, 0xe8e8e2), ...split(yellow, 0xe0b62e), paintMesh(arrowPos, arrowIdx, 0xe8e8e2, 5));
 
   for (const [name, list] of Object.entries(inst)) {
     const [geo, mat] = kit.kinds[name], mesh = new THREE.InstancedMesh(geo, mat, list.length);
@@ -290,6 +336,7 @@ export function buildStreets(ctx, zone) {
     });
     mesh.castShadow = name === 'crown' || name === 'trunk' || name === 'pole';
     mesh.receiveShadow = name === 'crown';
+    list.forEach((it, i) => { if (it.lamp) signals.push({ mesh, i, ...it.lamp }); });
     group.add(mesh);
   }
   group.add(signs.build(kit.signs));
@@ -314,5 +361,5 @@ export function buildStreets(ctx, zone) {
     group.add(poolMesh, haloMesh);
     decals.push(poolMesh);
   }
-  return { group, posts, lamps, decals };
+  return { group, posts, lamps, decals, signals };
 }

@@ -79,13 +79,26 @@ export function ribbonMesh(items, color, yOf, depth = 1, { snow = 0, glossy = fa
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geo.setIndex(indices);
   geo.computeVertexNormals();
-  const material = once(`ribbon:${color}:${depth}:${snow}:${glossy}`, () => {
-    const options = { color, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 * depth, polygonOffsetUnits: -8 * depth };
-    const m = glossy ? new THREE.MeshStandardMaterial({ ...options, roughness: 0.92 }) : new THREE.MeshLambertMaterial(options);
-    if (glossy) m.userData.dry = m.color.clone();
-    return glossy ? wetRoad(m, snow) : snow ? snowable(m, snow) : m;
-  });
-  const mesh = new THREE.Mesh(geo, material);
+  const mesh = new THREE.Mesh(geo, ribbonMaterial(color, depth, snow, glossy));
+  mesh.receiveShadow = true;
+  mesh.visible = indices.length > 0;
+  return mesh;
+}
+
+const ribbonMaterial = (color, depth, snow, glossy) => once(`ribbon:${color}:${depth}:${snow}:${glossy}`, () => {
+  const options = { color, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 * depth, polygonOffsetUnits: -8 * depth };
+  const m = glossy ? new THREE.MeshStandardMaterial({ ...options, roughness: 0.92 }) : new THREE.MeshLambertMaterial(options);
+  if (glossy) m.userData.dry = m.color.clone();
+  return glossy ? wetRoad(m, snow) : snow ? snowable(m, snow) : m;
+});
+
+// Flat painted shapes (arrows and the like) given as triangles, in the same paint as the ribbons.
+export function paintMesh(positions, indices, color, depth = 1) {
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  const mesh = new THREE.Mesh(geo, ribbonMaterial(color, depth, 0, false));
   mesh.receiveShadow = true;
   mesh.visible = indices.length > 0;
   return mesh;

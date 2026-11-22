@@ -4,6 +4,8 @@ import { buildTerrain, buildRoads, buildWalkways, buildWaterfront, tarmacMateria
 import { createStreetKit, buildStreets } from './map/street.js';
 import { createFacadeKit, buildFacades } from './map/facades.js';
 import { analyseStreets, limitOf } from './map/network.js';
+import { buildLaneGraph, signalState, lampLit } from './map/lanes.js';
+import { LAMP_COLOURS } from './map/street.js';
 import { Atlas } from './map/atlas.js';
 import { ENV } from './map/shared.js';
 
@@ -89,6 +91,7 @@ export async function createWorld(dir) {
 
   // ---------- zones ----------
   const net = analyseStreets(map);
+  const lanes = buildLaneGraph(map, net);       // lanes, junction movements and signal programmes
   const zones = [];
   for (let j = 0; j < rows; j++) {
     for (let i = 0; i < cols; i++) {
@@ -110,6 +113,30 @@ export async function createWorld(dir) {
 
   // ---------- collisions ----------
   const cells = new Map(), posts = [], lamps = [], unmirrored = [];
+  // ---------- signals ----------
+  // The lamps of every signal head built so far, zone by zone. Their colours follow each junction's
+  // programme; nothing changes faster than a few times a second, so that is how often they are redrawn.
+  const signalHeads = [], lampOn = {}, lampOff = {};
+  for (const [role, hex] of Object.entries(LAMP_COLOURS)) {
+    lampOn[role] = new THREE.Color(hex).multiplyScalar(3.2);
+    lampOff[role] = new THREE.Color(hex).multiplyScalar(0.035);
+  }
+  let signalStep = -1, signalTime = 0;
+  function updateSignals(time) {
+    const step = Math.floor(time * 4);
+    if (step === signalStep) return;
+    signalStep = step;
+    signalTime = time = step / 4;         // what the lamps show and what signalAt() answers stay in step
+    const states = new Map();
+    for (const zoneLamps of signalHeads) {
+      for (const { mesh, i, arm, role } of zoneLamps) {
+        const j = arm.junction;
+        if (!states.has(j)) states.set(j, signalState(j, time));
+        mesh.setColorAt(i, lampLit(role, states.get(j).arms[arm.id]) ? lampOn[role] : lampOff[role]);
+      }
+      for (const mesh of new Set(zoneLamps.map(l => l.mesh))) mesh.instanceColor.needsUpdate = true;
+    }
+  }
   let stamp = 0;
   function addSolid(p) {
     const [x0, z0, x1, z1] = boundsOf(p), solid = { p, x0, x1, z0, z1, seen: 0 };
@@ -187,6 +214,8 @@ export async function createWorld(dir) {
     posts.push(...streets.posts);
     lamps.push(...streets.lamps);
     unmirrored.push(...streets.decals);
+    if (streets.signals.length) signalHeads.push(streets.signals);
+    signalStep = -1;
     zone.level = 2;
     zone.data = null;                 // everything is in the scene now
     api.onZone?.(d.b);
@@ -297,7 +326,7 @@ export async function createWorld(dir) {
   // surface the car's wheels rest on
   const surface = (x, z) => ground(x, z) + LAYER.major;
   return Object.assign(api, {
-    map, group, ground, surface, query, roadAt, spawnOn, posts, update: streetKit.update, setConditions, lightLamps, setLampLights,
+    map, group, ground, surface, query, roadAt, spawnOn, posts, update: updateSignals, lanes, signalAt: junction => signalState(junction, signalTime), setConditions, lightLamps, setLampLights,
     stream, prepare, loadAll: () => prepare(0, 0, Infinity),
     get pending() { return pending; },
     // left out of the picture mirrored in a wet road: the road itself and the light painted on it

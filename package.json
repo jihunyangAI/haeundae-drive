@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "map:fetch": "node tools/fetch-map.mjs",
     "map:build": "node tools/build-map.mjs",
-    "radio:build": "node tools/build-radio.mjs"
+    "radio:build": "node tools/build-radio.mjs",
+    "lanes:check": "node tools/check-lanes.mjs"
   },
   "dependencies": {
     "three": "^0.187.0"
