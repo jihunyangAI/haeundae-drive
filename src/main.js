@@ -47,10 +47,12 @@ function selectCar(index) {
   const at = car ? { x: car.x, z: car.z, heading: car.heading } : spawn;
   if (car) {
     scene.remove(car.mesh);
-    car.mesh.traverse(o => { o.geometry?.dispose(); o.material?.map?.dispose(); o.material?.dispose(); });
+    car.mesh.traverse(o => { o.geometry?.dispose(); for (const m of [o.material].flat()) { m?.map?.dispose(); m?.dispose(); } });
   }
+  const signal = car?.signal;
   carIndex = index;
   car = new Vehicle(CARS[index], COLORS[colorIndex]);
+  if (signal) car.signal = signal;
   car.reset(at.x, at.z, at.heading);
   car.y = world.surface(at.x, at.z);
   scene.add(car.mesh);
@@ -59,6 +61,7 @@ selectCar(carIndex);
 
 // ---------- input ----------
 const keys = new Set();
+let padBefore = [];                     // which gamepad buttons were down last frame
 function readInput() {
   const k = (...codes) => (codes.some(c => keys.has(c)) ? 1 : 0);
   const inp = {
@@ -72,7 +75,14 @@ function readInput() {
     inp.down = Math.max(inp.down, pad.buttons[6]?.value || 0);
     if (inp.steer === 0) inp.steer = -dead(pad.axes[0] || 0);
     inp.handbrake ||= !!pad.buttons[0]?.pressed;
+    const down = pad.buttons.map(b => b.pressed), pressed = i => down[i] && !padBefore[i];
+    if (pressed(4)) car.setSignal('left');           // shoulder buttons: turn signals; Y: hazard lights
+    if (pressed(5)) car.setSignal('right');
+    if (pressed(3)) car.setSignal('hazard');
+    inp.horn = !!down[10];                           // press the left stick
+    padBefore = down;
   }
+  inp.horn ||= keys.has('KeyH');
   return inp;
 }
 
@@ -148,6 +158,7 @@ function update(dt, inp) {
   car.gx = (g(car.x + 1, car.z) - g(car.x - 1, car.z)) / 2;
   car.gz = (g(car.x, car.z + 1) - g(car.x, car.z - 1)) / 2;
   car.control(dt, inp);
+  sound.horn(!!inp.horn);
   const n = Math.max(1, Math.ceil(dt * 240));
   for (let i = 0; i < n; i++) car.step(dt / n, atmosphere.grip);
   car.collide(world);
@@ -164,8 +175,10 @@ function updateCamera(dt) {
   let fov = 45;
   if (state === 'menu') {
     orbit += dt * 0.2;
-    camera.position.set(p.x + Math.sin(orbit) * 7.4, p.y + 2.1, p.z + Math.cos(orbit) * 7.4);
+    const pose = window.__game?.pose, angle = pose ? car.heading + pose.angle : orbit, dist = pose?.dist ?? 7.4;
+    camera.position.set(p.x + Math.sin(angle) * dist, p.y + (pose?.height ?? 2.1), p.z + Math.cos(angle) * dist);
     camera.lookAt(p.x, p.y + 0.8, p.z);
+    if (pose?.fov) fov = pose.fov;
   } else if (view === 'chase') {
     camYaw += angleDiff(car.heading, camYaw) * (1 - Math.exp(-dt * 5));
     const dist = 6.4 + speed * 0.035;
@@ -187,7 +200,7 @@ function updateCamera(dt) {
 }
 
 // ---------- HUD ----------
-const hud = { speed: $('#speed'), gear: $('#gear'), rpm: $('#rpm'), limit: $('#limit'), road: $('#road-name') };
+const hud = { speed: $('#speed'), gear: $('#gear'), rpm: $('#rpm'), limit: $('#limit'), road: $('#road-name'), left: $('#blink-left'), right: $('#blink-right') };
 const mini = $('#minimap').getContext('2d'), MINI = 180, MINI_SCALE = 0.42;   // px per metre
 const paths = { minor: new Path2D(), major: new Path2D(), solid: new Path2D(), land: new Path2D() };
 const trace = (path, p, close) => {
@@ -242,6 +255,8 @@ function updateHud(dt) {
   hud.gear.textContent = car.reverse ? 'R' : `D${car.gear + 1}`;
   hud.rpm.style.width = `${Math.min(100, car.rpm / s.redline * 100)}%`;
   hud.rpm.classList.toggle('hot', car.rpm > s.redline * 0.9);
+  hud.left.classList.toggle('on', car.blinkOn && car.signal !== 'right');
+  hud.right.classList.toggle('on', car.blinkOn && car.signal !== 'left');
   roadTimer -= dt;
   if (roadTimer <= 0) {
     roadTimer = 0.3;
@@ -262,7 +277,7 @@ function renderMenu() {
       <em>${Math.round(c.powerKW * 1.36)}마력 · ${c.mass.toLocaleString()}kg · ${c.drive}</em>
     </button>`).join('');
   $('#color-list').innerHTML = COLORS.map((c, i) =>
-    `<button class="${i === colorIndex ? 'on' : ''}" data-color="${i}" style="background:#${c.toString(16).padStart(6, '0')}" aria-label="색상 ${i + 1}"></button>`).join('');
+    `<button class="${i === colorIndex ? 'on' : ''}" data-color="${i}" style="background:#${c.hex.toString(16).padStart(6, '0')}" aria-label="색상 ${i + 1}"></button>`).join('');
   const choices = (list, current, key) => list.map(o =>
     `<button class="${o === current ? 'on' : ''}" data-${key}="${o.id}">${o.name}</button>`).join('');
   $('#time-list').innerHTML = choices(TIMES, atmosphere.time, 'time');
@@ -279,7 +294,7 @@ $('#car-list').addEventListener('click', e => {
 $('#color-list').addEventListener('click', e => {
   if (e.target.dataset.color === undefined) return;
   colorIndex = Number(e.target.dataset.color);
-  car.vis.paint.color.set(COLORS[colorIndex]);
+  car.vis.setColour(COLORS[colorIndex]);
   renderMenu();
 });
 
@@ -287,6 +302,7 @@ function setState(next) {
   state = next;
   $('#menu').classList.toggle('is-hidden', next !== 'menu');
   $('#hud').classList.toggle('is-hidden', next !== 'drive');
+  if (next !== 'drive') sound.horn(false);
   if (next === 'drive') {
     camYaw = car.heading;
     sound.start();
@@ -326,6 +342,9 @@ addEventListener('keydown', e => {
   keys.add(e.code);
   if (e.code === 'KeyC') view = view === 'chase' ? 'cockpit' : 'chase';
   else if (e.code === 'KeyL') lights = !lights;
+  else if (e.code === 'KeyQ') car.setSignal('left');
+  else if (e.code === 'KeyE') car.setSignal('right');
+  else if (e.code === 'KeyF') car.setSignal('hazard');
   else if (e.code === 'KeyT') setSky({ time: cycle(TIMES, atmosphere.time) });
   else if (e.code === 'KeyY') setSky({ weather: cycle(WEATHERS, atmosphere.weather) });
   else if (e.code === 'KeyM') radio.muted = sound.toggleMute();
@@ -339,7 +358,8 @@ addEventListener('keydown', e => {
   else if (e.code === 'Escape') setState('menu');
 });
 addEventListener('keyup', e => keys.delete(e.code));
-addEventListener('blur', () => keys.clear());
+addEventListener('blur', () => { keys.clear(); sound.horn(false); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) sound.horn(false); });
 
 // ---------- loop ----------
 function resize() {
@@ -362,7 +382,9 @@ renderer.setAnimationLoop(now => {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   if (state === 'drive') update(dt, readInput());
-  car.sync(dt, lights, atmosphere.glow);
+  const blinking = car.blinkOn;
+  car.sync(dt, lights, atmosphere.glow, atmosphere.wet);
+  if (car.blinkOn !== blinking && state === 'drive') sound.tick(car.blinkOn);
   world.update(now / 1000);
   world.stream(car.x, car.z);
   camBefore.copy(camera.position);
@@ -387,6 +409,7 @@ renderer.setAnimationLoop(now => {
 
 // Handle for automated checks: runs the simulation without rendering. input(t) returns the controls at time t.
 window.__game = {
+  pose: null,                                 // { angle, dist, height, fov }: holds the menu camera still, for pictures of the car
   readyMs: Math.round(performance.now()),     // time from opening the page to being playable
   world, scene, camera, renderer, setState, setQuality, get quality() { return `${qualityChoice}:${qualityLevel}`; }, selectCar, setSky, atmosphere, radio, sound,
   get car() { return car; },

@@ -20,7 +20,20 @@ export class Vehicle {
     this.mesh = this.vis.root;
     this.mesh.rotation.order = 'YXZ';
     this.spin = 0;
+    this.signal = 'off';     // 'off' | 'left' | 'right' | 'hazard'
+    this.blinkT = 0;
+    this.blinkOn = false;
+    this.turned = false;     // the wheel has been turned the signalled way, so straightening up cancels the signal
     this.reset(0, 0, 0);
+  }
+
+  // Switch a turn signal or the hazard lights; asking for the one that is on switches it off.
+  // The hazard lights stay on until they are switched off themselves.
+  setSignal(which) {
+    if (this.signal === 'hazard' && which !== 'hazard') return;
+    this.signal = this.signal === which ? 'off' : which;
+    this.blinkT = 0;
+    this.turned = false;
   }
 
   reset(x, z, heading) {
@@ -56,6 +69,11 @@ export class Vehicle {
     // Lock shrinks with speed so a full key press asks for about 0.65 g on dry tarmac: brisk, not a skid.
     const maxSteer = Math.min(0.6, 0.65 * Math.atan(s.wheelbase * G / Math.max(speed * speed, 1)));
     this.steer = this.steerIn * maxSteer;
+    if (this.signal === 'left' || this.signal === 'right') {
+      const towards = this.steerIn * (this.signal === 'left' ? 1 : -1);
+      if (towards > 0.3 && speed > 1) this.turned = true;
+      else if (this.turned && towards < 0.06) this.signal = 'off';
+    }
 
     // automatic gearbox
     this.shiftT = Math.max(0, this.shiftT - dt);
@@ -175,7 +193,8 @@ export class Vehicle {
   }
 
   // dark: 0..1, how much the headlamps stand out against the daylight
-  sync(dt, lightsOn, dark = 1) {
+  // wet: 0..1 rain on the bodywork
+  sync(dt, lightsOn, dark = 1, wet = 0) {
     const v = this.vis, s = this.spec;
     const k = Math.min(1, dt * 6);
     const sin = Math.sin(this.heading), cos = Math.cos(this.heading);
@@ -197,8 +216,17 @@ export class Vehicle {
     v.steeringWheel.rotation.z = -this.steer * 6;
 
     this.rpm += (this.rpmTarget - this.rpm) * Math.min(1, dt * 10);
-    v.headMat.emissiveIntensity = lightsOn ? 8 : 0.3;
-    v.tailMat.emissiveIntensity = this.brake > 0.05 ? 7 : lightsOn ? 1.6 : 0.4;
+    this.blinkT = this.signal === 'off' ? 0 : this.blinkT + dt;
+    this.blinkOn = this.signal !== 'off' && this.blinkT % 0.72 < 0.36;
+    const braking = this.brake > 0.05;
+    const L = v.lamps, amber = side => (this.blinkOn && (this.signal === side || this.signal === 'hazard') ? 7 : 0.03);
+    L.head.emissiveIntensity = lightsOn ? 8 : 0.04;
+    L.drl.emissiveIntensity = lightsOn ? 1.5 : 2.6;
+    L.tail.emissiveIntensity = braking ? 7 : lightsOn ? 1.6 : 0.3;
+    L.reverse.emissiveIntensity = this.reverse ? 5 : 0.02;
+    L.left.emissiveIntensity = amber('left');
+    L.right.emissiveIntensity = amber('right');
+    v.paint.roughness = Math.max(0.08, v.paint.userData.rough - 0.14 * wet);
     for (const spot of v.spots) spot.intensity = lightsOn ? 260 : 0;
     v.beamMat.opacity = lightsOn ? 0.06 + 0.3 * dark : 0;
   }
