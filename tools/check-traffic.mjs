@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { analyseStreets } from '../src/map/network.js';
 import { buildLaneGraph } from '../src/map/lanes.js';
 import { createTraffic } from '../src/traffic.js';
+import { buildStops } from '../src/map/stops.js';
 
 const minutes = Number(process.argv[2]) || 30, want = Number(process.argv[3]) || 40;
 const map = JSON.parse(readFileSync(new URL('../public/map/haeundae/base.json', import.meta.url)));
@@ -14,7 +15,9 @@ const rand = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
 const failures = [];
 
 for (const [name, x, z] of PLACES) {
-  const traffic = createTraffic(buildLaneGraph(map, analyseStreets(map)), { rand });
+  const graph = buildLaneGraph(map, analyseStreets(map)), stops = buildStops(graph);
+  if (name === PLACES[0][0]) console.log(JSON.stringify({ busStops: stops.length, names: [...new Set(stops.map(s => s.name.replace(/ [0-9]+$/, '')))].join(', ') }));
+  const traffic = createTraffic(graph, { rand });
   const focus = { x, z }, dt = 0.1, steps = minutes * 60 / dt;
   let overlaps = 0, speedSum = 0, samples = 0, moving = 0, least = Infinity, most = 0, worstJam = 0;
   const touching = new Set();
@@ -45,7 +48,7 @@ for (const [name, x, z] of PLACES) {
     }
   }
   const s = traffic.stats, share = moving / samples;
-  console.log(JSON.stringify({ place: name, minutes, cars: `${least}-${most}`, meanKmh: +(speedSum / samples * 3.6).toFixed(1), movingShare: +share.toFixed(2), junctionsCrossed: s.crossed, leftAtMapEdge: s.left, removedAsStuck: s.stuck, stuckBecause: s.why, where: s.where.slice(0, 12), longestJamS: Math.round(worstJam), overlaps, crossedOnRed: s.ranRed }));
+  console.log(JSON.stringify({ place: name, minutes, cars: `${least}-${most}`, meanKmh: +(speedSum / samples * 3.6).toFixed(1), movingShare: +share.toFixed(2), junctionsCrossed: s.crossed, busStopsServed: s.busStops, leftAtMapEdge: s.left, removedAsStuck: s.stuck, stuckBecause: s.why, where: s.where.slice(0, 12), longestJamS: Math.round(worstJam), overlaps, crossedOnRed: s.ranRed }));
   if (overlaps) failures.push(`${name}: ${overlaps} overlaps`);
   if (s.ranRed) failures.push(`${name}: ${s.ranRed} cars crossed on red`);
   if (share < 0.35) failures.push(`${name}: only ${Math.round(share * 100)}% of cars moving`);

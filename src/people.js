@@ -78,6 +78,7 @@ export function createPeople(walks, options = {}) {
     return usableOnes.at(-1);
   }
   function remove(p) {
+    if (p.stand) p.stand.waiting--;
     if (p.edge.kind === 'cross') p.edge.arm.walkers--;
     people.splice(people.indexOf(p), 1);
   }
@@ -118,6 +119,10 @@ export function createPeople(walks, options = {}) {
       p.ox += p.awayX * 3.2 * dt;
       p.oz += p.awayZ * 3.2 * dt;
       p.moving = true;
+    } else if (p.stand) {                                   // waiting for a bus: stays put, facing the road
+      const k = Math.min(1, dt * 1.2);
+      p.ox -= p.ox * k;
+      p.oz -= p.oz * k;
     } else {
       // step back onto the line being walked
       const k = Math.min(1, dt * 1.2);
@@ -138,6 +143,15 @@ export function createPeople(walks, options = {}) {
         p.moving = true;
       }
     }
+    if (p.stand) {
+      p.x = p.bx + p.ox;
+      p.z = p.bz + p.oz;
+      const face = p.dodge > 0 ? [p.awayX, p.awayZ] : [p.stand.uz, -p.stand.ux], k = Math.min(1, dt * 6);
+      p.ux += (face[0] - p.ux) * k;
+      p.uz += (face[1] - p.uz) * k;
+      if (p.moving) p.stride += dt * 11;
+      return;
+    }
     const on = p.edge;
     poseAt(on, p.dir > 0 ? p.s : on.len - p.s, pose);
     const ux = pose.ux * p.dir, uz = pose.uz * p.dir;
@@ -149,6 +163,23 @@ export function createPeople(walks, options = {}) {
     p.ux += (face[0] - p.ux) * k;
     p.uz += (face[1] - p.uz) * k;
     if (p.moving) p.stride += dt * (p.dodge > 0 ? 11 : p.pace * 4.6);
+  }
+
+  // someone waiting at a bus stop
+  const AT_STOP = { kind: 'side' };
+  function wait(stop, focus, near, hidden) {
+    const along = (rand() - 0.5) * 3.4, back = -0.1 + rand() * 0.4,       // under the roof, in front of the bench
+       x = stop.kx + stop.ux * along - stop.uz * back, z = stop.kz + stop.uz * along + stop.ux * back;
+    const d = Math.hypot(x - focus.x, z - focus.z);
+    if (d < near || d > REACH || (d < 110 && !hidden(x, z))) return false;
+    stop.waiting++;
+    people.push({
+      id: nextId++, edge: AT_STOP, stand: stop, bx: x, bz: z, dir: 1, s: 0, next: null, pace: 1.2, lat: 0, wait: 0, counted: false,
+      dodge: 0, away: 1, awayX: 0, awayZ: 0, ox: 0, oz: 0, moving: false, stride: 0, x, z, ux: stop.uz, uz: -stop.ux,
+      look: [rand(), rand(), rand()], height: 0.9 + rand() * 0.2, carries: rand() < 0.85, umbrella: false,
+    });
+    stats.spawned++;
+    return true;
   }
 
   function spawn(focus, near, hidden, wet) {
@@ -178,7 +209,8 @@ export function createPeople(walks, options = {}) {
     // player: the player's car { x, z, vx, vz } or null; hidden(x, z): true where someone may appear unseen;
     // wet: 0..1 how hard it rains or snows. Returns what the player's car must do for the people ahead:
     // 0 nothing, 1 slow to walking pace, 2 stop.
-    step(dt, { focus, want, cars = [], player = null, hidden = () => true, near = 30, wet = 0 }) {
+    // stops: the bus stops (see map/stops.js), where a couple of people stand waiting.
+    step(dt, { focus, want, cars = [], player = null, hidden = () => true, near = 30, wet = 0, stops = [] }) {
       time += dt;
       if (time - nearbyAt > 2 || Math.hypot(focus.x - nearbyFor[0], focus.z - nearbyFor[1]) > 40) {
         nearbyAt = time;
@@ -201,9 +233,15 @@ export function createPeople(walks, options = {}) {
           }
         }
       }
+      let standing = 0;
+      for (const p of people) if (p.stand) standing++;
+      for (const stop of stops) {
+        if (stop.shelter && standing < want * 0.25 && people.length < want && stop.waiting < 2 && Math.abs(stop.kx - focus.x) < REACH && Math.abs(stop.kz - focus.z) < REACH && wait(stop, focus, near, hidden)) standing++;
+      }
       for (let tries = 0; tries < 3 && people.length < want; tries++) spawn(focus, near, hidden, wet);
       if (people.length > want) {
-        const spare = people.find(p => p.edge.kind !== 'cross' && Math.hypot(p.x - focus.x, p.z - focus.z) > 50 && hidden(p.x, p.z));
+        const far = p => Math.hypot(p.x - focus.x, p.z - focus.z) > 50 && hidden(p.x, p.z);
+        const spare = people.find(p => p.stand && far(p) && standing > want * 0.25) || people.find(p => p.edge.kind !== 'cross' && !p.stand && Math.hypot(p.x - focus.x, p.z - focus.z) > 50 && hidden(p.x, p.z));
         if (spare) remove(spare);
       }
       return brake;

@@ -8,6 +8,7 @@ import { buildLaneGraph, signalState, lampLit } from './map/lanes.js';
 import { LAMP_COLOURS } from './map/street.js';
 import { createTrafficKit } from './trafficview.js';
 import { buildWalks } from './map/walks.js';
+import { buildStops } from './map/stops.js';
 import { Atlas } from './map/atlas.js';
 import { ENV } from './map/shared.js';
 
@@ -95,6 +96,9 @@ export async function createWorld(dir) {
   // ---------- zones ----------
   const net = analyseStreets(map);
   const lanes = buildLaneGraph(map, net);       // lanes, junction movements and signal programmes
+  const stops = buildStops(lanes, (x, z) => map.isLand(x, z) && !nearRoad(x, z, 0.4, 'drive'));
+  // pavements, crossings and footpaths for people on foot (the street builder reads the crossings too)
+  const walks = buildWalks(lanes, map, { blocked: (x, z, road) => nearRoad(x, z, 0.3, 'drive', road), isLand: map.isLand });
   const zones = [];
   for (let j = 0; j < rows; j++) {
     for (let i = 0; i < cols; i++) {
@@ -132,10 +136,13 @@ export async function createWorld(dir) {
     signalTime = time = step / 4;         // what the lamps show and what signalAt() answers stay in step
     const states = new Map();
     for (const zoneLamps of signalHeads) {
-      for (const { mesh, i, arm, role } of zoneLamps) {
+      for (const { mesh, i, arm, role, bar } of zoneLamps) {
         const j = arm.junction;
         if (!states.has(j)) states.set(j, signalState(j, time));
-        mesh.setColorAt(i, lampLit(role, states.get(j).arms[arm.id]) ? lampOn[role] : lampOff[role]);
+        const state = states.get(j), s = state.arms[arm.id];
+        // the bars beside the walking figure count the time left down
+        const on = role === 'count' ? s.walk !== 'stop' && bar < Math.ceil(6 * state.remain / state.step.dur) : lampLit(role, s, time);
+        mesh.setColorAt(i, on ? lampOn[role] : lampOff[role]);
       }
       for (const mesh of new Set(zoneLamps.map(l => l.mesh))) mesh.instanceColor.needsUpdate = true;
     }
@@ -189,7 +196,7 @@ export async function createWorld(dir) {
   }
 
   // ---------- building zones ----------
-  const ctx = { map, ground, atlas, kit: streetKit, nearRoad };
+  const ctx = { map, ground, atlas, kit: streetKit, nearRoad, stops };
   const api = { onZone: null, timings: { far: [], near: [] } };   // onZone(buildings): a zone's buildings became solid. timings: ms per build
 
   function buildFar(zone) {
@@ -330,9 +337,8 @@ export async function createWorld(dir) {
   // surface the car's wheels rest on
   const surface = (x, z) => ground(x, z) + LAYER.major;
   return Object.assign(api, {
-    map, group, ground, surface, query, roadAt, spawnOn, posts, update: updateSignals, lanes, trafficKit,
-    // pavements, crossings and footpaths for people on foot
-    walks: buildWalks(lanes, map, { blocked: (x, z, road) => nearRoad(x, z, 0.3, 'drive', road), isLand: map.isLand }), signalAt: junction => signalState(junction, signalTime), setConditions, lightLamps, setLampLights,
+    map, group, ground, surface, query, roadAt, spawnOn, posts, update: updateSignals, lanes, stops, trafficKit, atlas,
+    walks, signalAt: junction => signalState(junction, signalTime), setConditions, lightLamps, setLampLights,
     stream, prepare, loadAll: () => prepare(0, 0, Infinity),
     get pending() { return pending; },
     // left out of the picture mirrored in a wet road: the road itself and the light painted on it

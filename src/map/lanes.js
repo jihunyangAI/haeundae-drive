@@ -384,8 +384,11 @@ export function signalState(junction, time) {
 
 // Is this lamp of a signal head lit? role: 'red' | 'amber' | 'arrow' | 'green'; s: the arm's entry in
 // signalState().arms. While only the arrow runs, the red stays on beside it.
-export const lampLit = (role, s) => (role === 'green' ? s.through === 'G' : role === 'arrow' ? s.left === 'G'
-  : role === 'amber' ? s.through === 'Y' || s.through === 'R' && s.left === 'Y' : s.through === 'R' && s.left !== 'Y');
+// The pedestrian head has 'walkRed' and 'walkGreen' (which flashes towards the end; `time` in seconds).
+export const lampLit = (role, s, time = 0) => (role === 'green' ? s.through === 'G' : role === 'arrow' ? s.left === 'G'
+  : role === 'amber' ? s.through === 'Y' || s.through === 'R' && s.left === 'Y'
+    : role === 'walkRed' ? s.walk === 'stop' : role === 'walkGreen' ? s.walk === 'walk' || s.walk === 'flash' && time % 1 < 0.5
+      : s.through === 'R' && s.left !== 'Y');
 
 // May this movement go, given the junction's signal state?  'go' | 'yield' (go if the way is clear) | 'stop'
 export function mayGo(move, state) {

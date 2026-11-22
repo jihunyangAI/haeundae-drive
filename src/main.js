@@ -64,7 +64,7 @@ function updateTraffic(dt) {
   frustum.setFromProjectionMatrix(viewMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
   const player = { x: car.x, z: car.z, vx: car.vx, vz: car.vz };
   brakeForPeople = people.step(Math.min(dt, 0.1), {
-    focus: car, want: crowd, cars: traffic.cars, player, hidden: outOfSight, near: peopleFilled ? 45 : 14, wet: Math.max(atmosphere.rain, atmosphere.snowfall),
+    focus: car, want: crowd, cars: traffic.cars, player, hidden: outOfSight, near: peopleFilled ? 45 : 14, wet: Math.max(atmosphere.rain, atmosphere.snowfall), stops: world.stops,
   });
   if (people.people.length >= crowd * 0.8) peopleFilled = true;
   peopleView.sync(people.people);

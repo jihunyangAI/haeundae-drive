@@ -53,7 +53,7 @@ export function createTraffic(graph, options = {}) {
   const signalOf = options.signalOf || (j => signalState(j, time));
   for (const lane of graph.lanes) { measure(lane); lane.cars = []; lane.limit = limitOf(lane.road) / 3.6; }
   for (const move of graph.moves) { measure(move); move.cars = []; move.held = 0; move.speed = turnSpeed(move); }
-  const cars = [], events = [], stats = { spawned: 0, left: 0, stuck: 0, ranRed: 0, crossed: 0, bumped: 0, why: {}, where: [] };
+  const cars = [], events = [], stats = { spawned: 0, left: 0, stuck: 0, ranRed: 0, crossed: 0, bumped: 0, busStops: 0, why: {}, where: [] };
   let nextId = 1, nearby = [], nearbyAt = -9, nearbyFor = [0, 0];
   const totalWeight = list => list.reduce((s, k) => s + k.weight, 0);
 
@@ -142,6 +142,17 @@ export function createTraffic(graph, options = {}) {
     if (onMove) {
       for (const c of path.to.cars) see(rest + c.s - (c.len + car.len) / 2, c.v, 'queue', c);
       if (path.turn === 'L' || path.turn === 'R') car.signal = path.turn;
+    }
+    // a bus pulls up at each stop on its lane and waits there a little while
+    if (!onMove && path.stop && car.kind.id === 'bus' && car.served !== path.stop) {
+      const to = path.stop.s - car.s;
+      if (to > -0.5) {
+        see(Math.max(0, to) + STANDSTILL - 0.2, 0, 'stop');
+        if (to < 1.5 && car.v < 0.2) { car.dwell += dt; car.why = 'stop'; if (car.dwell > 9) { car.served = path.stop; car.dwell = 0; stats.busStops++; } }
+      } else car.served = path.stop;
+    }
+    if (onMove) {
+      // nothing more to decide until the junction is behind
     } else if (car.next) {
       const move = car.next, toLine = rest - car.len / 2;
       if (toLine < 35 && (move.turn === 'L' || move.turn === 'R')) car.signal = move.turn;
@@ -229,6 +240,7 @@ export function createTraffic(graph, options = {}) {
         car.path = path.to;
         car.path.cars.push(car);
         car.halted = false;
+        car.served = null;
         if (car.beyond.length) { car.next = car.beyond.shift(); car.holds = car.held.includes(car.next) ? car.next : null; } else plan(car, car.path);
         stats.crossed++;
       } else if (car.next && car.holds) {
@@ -250,7 +262,7 @@ export function createTraffic(graph, options = {}) {
         car.holds = null;
       }
       car.wait += dt;
-      if (car.why !== 'signal') car.jam += dt;
+      if (car.why !== 'signal' && car.why !== 'stop') car.jam += dt;
       if (car.blocked && car.wait > 5 && time - car.honked > 7) { car.honked = time; events.push({ type: 'honk', x: car.x, z: car.z }); }
     } else car.wait = car.jam = 0;
     poseAt(car.path, car.s, pose);
@@ -281,7 +293,7 @@ export function createTraffic(graph, options = {}) {
     for (const k of kinds) { pick -= k.weight; if (pick <= 0) { kind = k; break; } }
     const car = {
       id: nextId++, kind, len: kind.len, path: lane, s, v: lane.limit * 0.6, pace: 0.82 + rand() * 0.16, next: null, beyond: [], held: [], holds: null, halted: false,
-      wait: 0, jam: 0, bumped: 0, honked: -99, blocked: false, braking: false, signal: '', why: '', tint: rand(),
+      wait: 0, jam: 0, bumped: 0, dwell: 0, served: null, honked: -99, blocked: false, braking: false, signal: '', why: '', tint: rand(),
       x: pose.x, z: pose.z, ux: pose.ux, uz: pose.uz,
     };
     plan(car, lane);

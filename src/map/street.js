@@ -2,13 +2,15 @@ import * as THREE from 'three';
 import { limitOf } from './network.js';
 import { ribbonMesh, paintMesh, LAYER } from './meshes.js';
 import { laneSplit } from './lanes.js';
+import { PLACES } from './stops.js';
 import { pointInPolygon, boundsOf } from './data.js';
 import { QuadBatch, FONT, seeded } from './atlas.js';
 import { snowable } from './shared.js';
 
 const KERBED = /^(trunk|primary|secondary|tertiary|residential|unclassified|living_street)$/;
 const SIDEWALK_W = 3;
-export const LAMP_COLOURS = { red: 0xff2a1a, amber: 0xffb000, green: 0x18e07a, arrow: 0x18e07a };
+export const LAMP_COLOURS = { red: 0xff2a1a, amber: 0xffb000, green: 0x18e07a, arrow: 0x18e07a, walkRed: 0xff2a1a, walkGreen: 0x18e07a, count: 0x18e07a };
+const WIRED = /^(residential|living_street|unclassified)$/;     // streets with overhead lines and speed bumps
 
 // Road arrows, in metres: x to the right of travel, y along it. Each is a few convex pieces.
 const SHAFT = y1 => [[-0.08, 0], [0.08, 0], [0.08, y1], [-0.08, y1]];
@@ -37,6 +39,10 @@ export function createStreetKit(atlas) {
   };
   kinds.lamp = [new THREE.CircleGeometry(1, 16), signalLamp];
   kinds.arrowLamp = [new THREE.ShapeGeometry(arrow), signalLamp];
+  kinds.barLamp = [new THREE.PlaneGeometry(1, 1), signalLamp];
+  kinds.cone = [new THREE.ConeGeometry(1, 1, 7), kinds.crown[1]];                 // pine trees
+  kinds.concrete = [cylinder, new THREE.MeshStandardMaterial({ color: 0x8e8d87, roughness: 0.9 })];       // utility poles
+  kinds.panel = [box, new THREE.MeshStandardMaterial({ color: 0xaebdca, roughness: 0.25, metalness: 0.3, transparent: true, opacity: 0.55 })];   // shelter glass
 
   // Pool of light on the ground under each lamp: a glowing disc laid along the slope. Cheaper than a
   // real light per lamp, and enough to read as a lit street.
@@ -76,7 +82,7 @@ function pointBack(pts, back) {
 }
 
 // Road paint, kerbs, signals, lamps, signs and trees for one zone.
-// ctx: { map, ground, atlas, kit, nearRoad } - nearRoad(x, z, margin, kind, except) tells whether a
+// ctx: { map, ground, atlas, kit, nearRoad, stops } - nearRoad(x, z, margin, kind, except) tells whether a
 // road of that kind ('drive' or 'any') lies within `margin` metres of its edge.
 // zone: { owns, streets, outlines, areas, lines, seed, x0, z0, x1, z1 }.
 // Streets are worked out whole and each zone keeps what falls inside it, so zones agree at their edges.
@@ -84,14 +90,15 @@ function pointBack(pts, back) {
 // are the cars standing beside the access roads, { x, z, heading, kind, tint }; signals are
 // the lamps of the signal heads, { mesh, i, arm, role }, for the world to switch on and off.
 export function buildStreets(ctx, zone) {
-  const { map, ground, atlas, kit, nearRoad } = ctx, { owns } = zone, rand = seeded(7 + zone.seed);
+  const { map, ground, atlas, kit, nearRoad, stops } = ctx, { owns } = zone, rand = seeded(7 + zone.seed);
   const white = [], yellow = [], sidewalks = [], posts = [], lamps = [];
   const signs = new QuadBatch(atlas);
   const inst = {};
   const dummy = new THREE.Object3D();
-  const put = (name, x, y, z, heading, sx, sy, sz, color, lamp) => {
+  dummy.rotation.order = 'YXZ';
+  const put = (name, x, y, z, heading, sx, sy, sz, color, lamp, pitch = 0) => {
     dummy.position.set(x, y, z);
-    dummy.rotation.set(0, heading, 0);
+    dummy.rotation.set(pitch, heading, 0);
     dummy.scale.set(sx, sy, sz);
     dummy.updateMatrix();
     (inst[name] ||= []).push({ m: dummy.matrix.clone(), color, lamp });
@@ -117,13 +124,27 @@ export function buildStreets(ctx, zone) {
   const inBuilding = (x, z) => outlines.some(o => x >= o.box[0] && x <= o.box[2] && z >= o.box[1] && z <= o.box[3] && pointInPolygon(x, z, o.p));
   // Kerbside things must not land on another carriageway (driveways, the other half of a divided road).
   const blocked = (at, own) => nearRoad(at.x, at.z, 0.4, 'drive', own);
-  const tree = (x, z, own) => {
+  // kind: 'ginkgo' (the usual street tree), 'pine' along the sea front, 'cherry' on Dalmaji-gil
+  const tree = (x, z, own, kind = 'ginkgo') => {
     if (!owns(x, z) || inBuilding(x, z) || !map.isLand(x, z) || nearRoad(x, z, 0.8, 'drive', own)) return;
-    const y = ground(x, z), rw = 1.5 + rand() * 0.9, rh = 1.8 + rand() * 1.0, turn = rand() * 6.28;
-    put('trunk', x, y + 1.6, z, 0, 0.16, 3.2, 0.16);
-    put('crown', x, y + 2.9 + rh * 0.6, z, turn, rw, rh, rw, new THREE.Color().setHSL(0.24 + rand() * 0.1, 0.42, 0.2 + rand() * 0.1));
+    const y = ground(x, z), turn = rand() * 6.28;
+    if (kind === 'pine') {
+      const h = 5.5 + rand() * 2, w = 1.5 + rand() * 0.5, green = new THREE.Color().setHSL(0.36 + rand() * 0.04, 0.42, 0.13 + rand() * 0.05);
+      put('trunk', x, y + h * 0.4, z, 0, 0.13, h * 0.8, 0.13);
+      put('cone', x, y + h * 0.72, z, turn, w * 1.25, h * 0.36, w * 1.25, green);
+      put('cone', x, y + h * 0.95, z, turn + 1, w * 0.85, h * 0.34, w * 0.85, green);
+    } else {
+      const cherry = kind === 'cherry', rw = (cherry ? 2.0 : 1.5) + rand() * 0.9, rh = (cherry ? 1.5 : 1.8) + rand() * 1.0;
+      const colour = cherry ? new THREE.Color().setHSL(0.93 + rand() * 0.04, 0.6, 0.78 + rand() * 0.08) : new THREE.Color().setHSL(0.24 + rand() * 0.1, 0.42, 0.2 + rand() * 0.1);
+      put('trunk', x, y + 1.6, z, 0, 0.16, 3.2, 0.16);
+      put('crown', x, y + 2.9 + rh * 0.6, z, turn, rw, rh, rw, colour);
+    }
     posts.push({ x, z, r: 0.25 });
   };
+  const speciesOf = road => (/해변/.test(road.n) ? 'pine' : /달맞이/.test(road.n) ? 'cherry' : 'ginkgo');
+  // a cell of the sign atlas, or null when the atlas has no room left
+  const cell = (key, draw, width) => { try { return atlas.add(key, draw, width); } catch { return null; } };
+  const text = (g, font, colour = '#fff') => { g.fillStyle = colour; g.font = font; g.textAlign = 'center'; g.textBaseline = 'middle'; };
 
   const nameRect = name => atlas.add(`road:${name}`, (g, w, h) => {
     g.fillStyle = '#1d4f9e';
@@ -157,11 +178,13 @@ export function buildStreets(ctx, zone) {
   // Signal head on a mast arm for the lanes that approach along frame f (taken at the stop line).
   // It stands `ahead` metres on, across the junction, where a waiting driver can see it.
   // arm: the approach it controls (see lanes.js); a fourth lamp shows the left-turn arrow if it has one.
-  function signal(f, half, armLen, ahead, arm) {
+  function signal(f, half, armLen, far, arm) {
     const heading = Math.atan2(f.ux, f.uz);
-    const base = beside(f, half + 0.9, ahead), y = base.y;
-    // across a bent or wide junction the spot straight ahead can land on a carriageway - even the street's own
-    if (!owns(base.x, base.z) || blocked(base) || inBuilding(base.x, base.z)) return;
+    // Across a bent or wide junction the spot straight ahead can land on a carriageway - even the
+    // street's own. Then it stands nearer; if no spot is free the approach goes without a head.
+    const spot = [far, far - 5, far * 0.7, far * 0.5].map(d => ({ d, at: beside(f, half + 0.9, d) })).find(c => map.isLand(c.at.x, c.at.z) && !blocked(c.at));
+    if (!spot || !owns(spot.at.x, spot.at.z)) return;
+    const base = spot.at, y = base.y, ahead = spot.d;
     put('pole', base.x, y + 3.2, base.z, 0, 0.1, 6.4, 0.1);
     posts.push({ x: base.x, z: base.z, r: 0.2 });
     const boom = beside(f, half + 0.9 - armLen / 2, ahead), head = beside(f, half + 0.9 - armLen + 0.9, ahead);
@@ -173,6 +196,85 @@ export function buildStreets(ctx, zone) {
       const lamp = beside(f, half + 0.9 - armLen + 0.9 + (k - (roles.length - 1) / 2) * 0.47, ahead - 0.14);
       put(role === 'arrow' ? 'arrowLamp' : 'lamp', lamp.x, y + 6.15, lamp.z, heading + Math.PI, 0.16, 0.16, 1, dim, { arm, role });
     });
+  }
+
+  // The pedestrian signal at each end of a zebra crossing: a red and a green figure lamp and, beside
+  // them, bars that count the green time down. Each faces the people waiting on the other side.
+  function walkSignals(arm) {
+    const { a, b } = arm.zebra;
+    for (const [here, there] of [[a, b], [b, a]]) {
+      const dx = there.x - here.x, dz = there.z - here.z, len = Math.hypot(dx, dz) || 1, ux = dx / len, uz = dz / len;
+      const x = here.x - ux * 0.7, z = here.z - uz * 0.7;
+      if (!owns(x, z) || blocked({ x, z })) continue;
+      const y = ground(x, z) + LAYER.sidewalk, heading = Math.atan2(ux, uz), fx = x + ux * 0.13, fz = z + uz * 0.13;
+      put('pole', x, y + 1.3, z, 0, 0.06, 2.6, 0.06);
+      put('box', x, y + 2.75, z, heading, 0.62, 0.74, 0.22);
+      posts.push({ x, z, r: 0.1 });
+      const side = (d, up, role, kind, sx, sy, bar) => put(kind, fx - uz * d, y + 2.75 + up, fz + ux * d, heading, sx, sy, 1, dim, { arm, role, bar });
+      side(-0.13, 0.17, 'walkRed', 'lamp', 0.12, 0.12);
+      side(-0.13, -0.17, 'walkGreen', 'lamp', 0.12, 0.12);
+      for (let k = 0; k < 6; k++) side(0.17, -0.27 + k * 0.108, 'count', 'barLamp', 0.2, 0.07, k);
+    }
+  }
+
+  // The green direction sign before a big junction: which way each street or place lies.
+  function directions(arm, laneW) {
+    const lane = arm.entries.at(-1);
+    if (lane.len < 85) return;
+    const [at, dir] = pointBack(lane.pts, 45), f = { x: at[0], z: at[1], ux: dir[0], uz: dir[1] }, foot = beside(f, laneW / 2 + 1.5);
+    if (!owns(foot.x, foot.z) || blocked(foot, arm.road)) return;
+    const ways = [['L', '←'], ['S', '↑'], ['R', '→']].map(([turn, mark]) => {
+      const move = arm.entries.flatMap(l => l.out).find(m => m.turn === turn), name = move && move.to.road.n;
+      return name ? [mark, PLACES[name] || name] : null;
+    }).filter(Boolean);
+    if (!ways.length) return;
+    const rect = cell(`way:${ways.flat().join('')}`, (g, w, h) => {
+      g.fillStyle = '#0d6b3f';
+      g.fillRect(0, 0, w, h);
+      g.strokeStyle = '#fff';
+      g.lineWidth = 2;
+      g.strokeRect(3, 3, w - 6, h - 6);
+      ways.forEach(([mark, name], i) => {
+        const x = w * (i + 0.5) / ways.length;
+        text(g, `800 22px ${FONT}`);
+        g.fillText(mark, x, 19);
+        text(g, `700 ${name.length > 6 ? 13 : 16}px ${FONT}`);
+        g.fillText(name, x, 44, w / ways.length - 8);
+      });
+    });
+    if (!rect) return;
+    const y = foot.y + LAYER.sidewalk, heading = Math.atan2(f.ux, f.uz), over = beside(f, laneW / 2 + 1.5 - 2.9);
+    put('pole', foot.x, y + 3.1, foot.z, 0, 0.09, 6.2, 0.09);
+    put('box', (foot.x + over.x) / 2, y + 5.3, (foot.z + over.z) / 2, heading, 3.0, 0.1, 0.1);
+    signs.add(new THREE.Vector3(over.x, y + 5.3, over.z), new THREE.Vector3(-f.uz, 0, f.ux), 5.2, 1.3, rect);
+    posts.push({ x: foot.x, z: foot.z, r: 0.18 });
+  }
+
+  // "One way" where a one-way street starts, "no entry" where it ends. w: the direction a driver
+  // reading the sign is travelling in.
+  function oneWay(arm, s, into, half, st) {
+    const leaving = !arm.entries.length, f0 = st.at(s), w = { x: f0.x, z: f0.z, ux: -f0.ux * into, uz: -f0.uz * into };
+    const at = beside(w, half + 1.0, leaving ? 5 : 1.5);
+    if (!owns(at.x, at.z) || blocked(at, arm.road)) return;
+    const rect = leaving ? cell('sign:oneway', (g, _, h) => {
+      g.fillStyle = '#1d4f9e';
+      g.fillRect(0, 0, h, h);
+      text(g, `800 38px ${FONT}`);
+      g.fillText('↑', h / 2, 24);
+      text(g, `700 13px ${FONT}`);
+      g.fillText('일방통행', h / 2, 51);
+    }, atlas.cellH) : cell('sign:noentry', (g, _, h) => {
+      g.fillStyle = '#d62828';
+      g.beginPath();
+      g.arc(h / 2, h / 2, h / 2 - 1, 0, 7);
+      g.fill();
+      g.fillStyle = '#fff';
+      g.fillRect(10, h / 2 - 6, h - 20, 12);
+    }, atlas.cellH);
+    if (!rect) return;
+    put('pole', at.x, at.y + 1.4, at.z, 0, 0.05, 2.8, 0.05);
+    signs.add(new THREE.Vector3(at.x, at.y + 2.5, at.z), new THREE.Vector3(-w.uz, 0, w.ux), 0.7, 0.7, rect);
+    posts.push({ x: at.x, z: at.z, r: 0.12 });
   }
 
   // does the stretch s0..s1 of a street come within `reach` metres of this zone?
@@ -221,6 +323,29 @@ export function buildStreets(ctx, zone) {
         if (!atJunction(arm)) continue;
         if (arm.crossing) approach(s, dir, waits(arm) ? line(dir) : null, Math.min(4.5, iv.clear[dir > 0 ? 1 : 0] - 0.5));
         else if (waits(arm) && line(dir) && ownsAt(st.at(s))) white.push({ p: st.slice(Math.min(s, s - dir * 0.45), Math.max(s, s - dir * 0.45)), ...line(dir), whole: true });
+      }
+
+      for (const [arm, s, dir] of [[endArm, iv.s1, 1], [startArm, iv.s0, -1]]) {
+        if (arm.zebra && arm.junction.control === 'signal') walkSignals(arm);
+        if (r.ow && atJunction(arm) && arm.entries.length !== arm.exits.length) oneWay(arm, s, dir, half, st);
+        if (arm.give === 'signal' && arm.rank >= 3 && arm.entries.length >= 2) directions(arm, laneW);
+        // short posts either side of a zebra crossing keep cars off the corner
+        if (arm.zebra) {
+          for (const [here, there] of [[arm.zebra.a, arm.zebra.b], [arm.zebra.b, arm.zebra.a]]) {
+            const dx = there.x - here.x, dz = there.z - here.z, len = Math.hypot(dx, dz) || 1;
+            for (const along of [-1.9, 1.9]) {
+              const x = here.x + dx / len * 0.9 - dz / len * along, z = here.z + dz / len * 0.9 + dx / len * along;
+              if (!owns(x, z) || blocked({ x, z })) continue;
+              put('box', x, ground(x, z) + LAYER.sidewalk + 0.45, z, 0, 0.14, 0.9, 0.14);
+              posts.push({ x, z, r: 0.1 });
+            }
+          }
+        }
+      }
+      // a speed bump half way along a side street
+      if (WIRED.test(r.k) && iv.s1 - iv.s0 > 110) {
+        const mid = (iv.s0 + iv.s1) / 2;
+        if (ownsAt(st.at(mid))) for (let k = 0; k < 3; k++) yellow.push({ p: st.slice(mid + k * 0.9, mid + k * 0.9 + 0.45), w: r.w - 0.8, o: 0, whole: true });
       }
 
       // signal heads, on the far side of the junction
@@ -293,12 +418,65 @@ export function buildStreets(ctx, zone) {
         posts.push({ x: foot.x, z: foot.z, r: 0.18 });
         lamps.push(head);
       }
+      const species = speciesOf(r);
       for (let s = iv.s0 + 5; s < iv.s1 - 3; s += 13) {
         if (Math.abs((s - iv.s0 - 18) % 36) < 3) continue;     // keep clear of the lamps
         const f = st.at(s);
-        for (const sd of [-1, 1]) { const at = beside(f, sd * (half + 2.1)); tree(at.x, at.z, r); }
+        for (const sd of [-1, 1]) { const at = beside(f, sd * (half + 2.1)); tree(at.x, at.z, r, species); }
+      }
+      // overhead lines down one side of the back streets: a concrete pole every 38 m and two wires between
+      if (WIRED.test(r.k)) {
+        let before = null;
+        for (let s0 = iv.s0 + 9; s0 < iv.s1 - 4; s0 += 38) {
+          // not right beside a street lamp (those stand on this side every 72 m)
+          const beat = ((s0 - iv.s0 - 54) % 72 + 72) % 72, s = beat < 3 || beat > 69 ? s0 + 5 : s0;
+          const f = st.at(s), at = beside(f, -(half + 0.55));
+          if (blocked(at, r) || !map.isLand(at.x, at.z)) { before = null; continue; }
+          const top = at.y + LAYER.sidewalk + 8.6, heading = Math.atan2(f.ux, f.uz);
+          if (owns(at.x, at.z)) {
+            put('concrete', at.x, at.y + 4.5, at.z, 0, 0.15, 9, 0.15);
+            put('box', at.x, top - 0.1, at.z, heading + Math.PI / 2, 0.08, 0.08, 1.5);
+            posts.push({ x: at.x, z: at.z, r: 0.2 });
+          }
+          if (before && owns((before.x + at.x) / 2, (before.z + at.z) / 2)) {
+            const dx = at.x - before.x, dz = at.z - before.z, flat = Math.hypot(dx, dz), rise = top - before.top, turn = Math.atan2(dx, dz);
+            for (const off of [-0.6, 0.6]) {
+              put('box', (before.x + at.x) / 2 - Math.cos(turn) * off, (before.top + top) / 2, (before.z + at.z) / 2 + Math.sin(turn) * off, turn, 0.025, 0.025, Math.hypot(flat, rise), undefined, undefined, -Math.atan2(rise, flat));
+            }
+          }
+          before = { x: at.x, z: at.z, top };
+        }
       }
     }
+  }
+
+  // ---------- bus stops ----------
+  for (const stop of stops) {
+    if (!owns(stop.kx, stop.kz) || !map.isLand(stop.kx, stop.kz) || blocked({ x: stop.kx, z: stop.kz }) || inBuilding(stop.kx, stop.kz)) continue;
+    stop.shelter = true;                                   // people only wait where there is one
+    const y = ground(stop.kx, stop.kz) + LAYER.sidewalk, heading = Math.atan2(stop.ux, stop.uz), rx = -stop.uz, rz = stop.ux;
+    const spot = (along, out) => [stop.kx + stop.ux * along + rx * out, stop.kz + stop.uz * along + rz * out];
+    put('box', ...[spot(0, 0.35)[0], y + 2.5, spot(0, 0.35)[1]], heading, 1.5, 0.08, 3.8);           // roof
+    put('panel', ...[spot(0, 1.0)[0], y + 1.3, spot(0, 1.0)[1]], heading, 0.05, 2.3, 3.6);           // glass back
+    put('box', ...[spot(0, 0.7)[0], y + 0.45, spot(0, 0.7)[1]], heading, 0.4, 0.07, 2.2);            // bench
+    for (const along of [-1.8, 1.8]) {
+      const [x, z] = spot(along, -0.3);
+      put('pole', x, y + 1.25, z, 0, 0.04, 2.5, 0.04);
+      posts.push({ x, z, r: 0.1 });
+    }
+    const [sx, sz] = spot(2.8, -0.2), rect = cell(`stop:${stop.name}`, (g, w, h) => {
+      g.fillStyle = '#f4f4f1';
+      g.fillRect(0, 0, w, h);
+      g.fillStyle = '#1d4f9e';
+      g.fillRect(0, 0, 56, h);
+      text(g, `800 17px ${FONT}`);
+      g.fillText('버스', 28, h / 2 + 1);
+      text(g, `700 ${stop.name.length > 7 ? 19 : 25}px ${FONT}`, '#15171a');
+      g.fillText(stop.name, 56 + (w - 56) / 2, h / 2 + 2, w - 64);
+    });
+    put('pole', sx, y + 1.5, sz, 0, 0.045, 3, 0.045);
+    posts.push({ x: sx, z: sz, r: 0.1 });
+    if (rect) signs.add(new THREE.Vector3(sx, y + 2.75, sz), new THREE.Vector3(-stop.uz, 0, stop.ux), 1.4, 0.35, rect, true);
   }
 
   // ---------- parked cars ----------
@@ -359,8 +537,8 @@ export function buildStreets(ctx, zone) {
       mesh.setMatrixAt(i, it.m);
       if (it.color) mesh.setColorAt(i, it.color);
     });
-    mesh.castShadow = name === 'crown' || name === 'trunk' || name === 'pole';
-    mesh.receiveShadow = name === 'crown';
+    mesh.castShadow = name === 'crown' || name === 'cone' || name === 'trunk' || name === 'pole' || name === 'concrete';
+    mesh.receiveShadow = name === 'crown' || name === 'cone';
     list.forEach((it, i) => { if (it.lamp) signals.push({ mesh, i, ...it.lamp }); });
     group.add(mesh);
   }
