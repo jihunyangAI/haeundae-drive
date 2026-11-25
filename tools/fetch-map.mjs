@@ -4,7 +4,7 @@
 // Usage: node tools/fetch-map.mjs
 
 import { mkdir, writeFile } from 'node:fs/promises';
-import { REGION, bbox, tileX, tileY } from './region.mjs';
+import { REGION, bbox, boxes, tileX, tileY } from './region.mjs';
 
 const UA = 'map-validation-script/0.1';
 const RAW = new URL('../data/raw/', import.meta.url);
@@ -16,14 +16,41 @@ const OVERPASS = [
   'https://overpass.private.coffee/api/interpreter',
 ];
 
+// One Overpass query, tried on each server in turn and then again after a pause.
+async function ask(query, what) {
+  for (let round = 0; round < 4; round++) {
+    for (const url of OVERPASS) {
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'User-Agent': UA, 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'data=' + encodeURIComponent(query),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        if (json.remark) throw new Error(json.remark);          // answered, but it ran out of time or memory part-way
+        console.log(`osm ${what}: ${json.elements.length} elements from ${new URL(url).host}`);
+        return json.elements;
+      } catch (err) {
+        console.warn(`osm ${what}: ${new URL(url).host} failed (${err.message})`);
+      }
+    }
+    await new Promise(r => setTimeout(r, 15000 * (round + 1)));
+  }
+  throw new Error(`all Overpass servers failed for ${what}`);
+}
+
+// (Buildings are not asked for: they come from the building register, see fetch-buildings.mjs.)
+// Streets and what stands along them: only where the map has them (the town and the coast road), a
+// box at a time. The shore, woods and fields: over the whole rectangle, since the ground is drawn all over it.
 async function fetchOsm() {
-  const b = bbox(REGION, 30).join(',');
-  const query = `[out:json][timeout:180];
+  const seen = new Map(), add = list => { for (const e of list) seen.set(`${e.type}${e.id}`, e); };
+  const parts = boxes(REGION, 60);
+  for (let i = 0; i < parts.length; i++) {
+    const b = parts[i].join(',');
+    add(await ask(`[out:json][timeout:180];
 (
   way["highway"](${b});
-  way["building"](${b});
-  relation["building"](${b});
-  way["building:part"](${b});
   way["natural"](${b});
   relation["natural"="water"](${b});
   way["waterway"](${b});
@@ -31,23 +58,16 @@ async function fetchOsm() {
   way["landuse"](${b});
   way["man_made"~"pier|breakwater|bridge"](${b});
 );
-out geom;`;
-  for (const url of OVERPASS) {
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'User-Agent': UA, 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'data=' + encodeURIComponent(query),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-      console.log(`osm: ${json.elements.length} elements from ${new URL(url).host}`);
-      return json;
-    } catch (err) {
-      console.warn(`osm: ${new URL(url).host} failed (${err.message})`);
-    }
+out geom;`, `part ${i + 1}/${parts.length}`));
   }
-  throw new Error('all Overpass servers failed');
+  const whole = bbox(REGION, 30).join(',');
+  add(await ask(`[out:json][timeout:180];
+(
+  way["natural"~"coastline|wood|beach|sand|water"](${whole});
+  way["landuse"~"forest|farmland|orchard|meadow"](${whole});
+);
+out geom;`, 'shore and woods'));
+  return { elements: [...seen.values()] };
 }
 
 function tileRange(z, pad) {

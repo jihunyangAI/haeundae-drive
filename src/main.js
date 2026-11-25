@@ -210,6 +210,7 @@ function watchFrameRate(dt) {
 const glass = new Windshield($('#glass'));
 // photo mode: the camera circles the car where the mouse puts it
 const photo = { yaw: 0, pitch: 0.18, dist: 8, shoot: false };
+let returning = false;                  // on the way back to the start (R)
 const VIEWS = ['chase', 'cockpit', 'bonnet'];
 let state = 'menu', view = 'chase', lights = false, camYaw = spawn.heading, orbit = 0.6, frames = 0;
 let hudAlways = false;                  // show the on-screen instruments in the driver's seat too
@@ -596,7 +597,16 @@ addEventListener('keydown', e => {
     radio.volume = Math.max(0, Math.min(1, radio.volume + (e.code === 'Equal' ? 0.1 : -0.1)));
     $('#vol-music').value = Math.round(radio.volume * 100);
   }
-  else if (e.code === 'KeyR') { car.reset(spawn.x, spawn.z, spawn.heading); car.y = world.surface(spawn.x, spawn.z); camYaw = spawn.heading; }
+  else if (e.code === 'KeyR' && !returning) {
+    // the start may be far behind and no longer built: it is put up again before the car is set down there
+    returning = true;
+    world.prepare(spawn.x, spawn.z).finally(() => {
+      returning = false;
+      car.reset(spawn.x, spawn.z, spawn.heading);
+      car.y = world.surface(spawn.x, spawn.z);
+      camYaw = spawn.heading;
+    });
+  }
   else if (e.code === 'KeyP') setState('photo');
   else if (e.code === 'KeyN') {
     // the next place in the list, then none

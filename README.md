@@ -16,6 +16,7 @@ npm run dev
 ## 출처
 
 - 지도: © OpenStreetMap contributors (ODbL).
+- 지도 범위: 부산 해운대(마린시티 ~ 달맞이길)와 송정 ~ 기장 대변항 해안도로. 범위는 `tools/region.mjs`에 있고, `npm run dev` 후 `/mapcheck.html`에서 실제 지도와 겹쳐 볼 수 있습니다.
 - 건물 윤곽과 높이: 국토교통부 GIS건물통합정보 (브이월드). 내려받으려면 본인의 인증키가 필요합니다: `VWORLD_KEY=<키> node tools/fetch-buildings.mjs` 후 `node tools/build-map.mjs`.
 - 고도: Mapzen Terrarium 타일 (AWS Open Data)
 - 인물 모델: Quaternius (quaternius.com), CC0 1.0

@@ -6,13 +6,14 @@
 //
 // The key is personal: it comes from the environment and is never written to a file.
 import { mkdir, writeFile } from 'node:fs/promises';
-import { REGION, bbox } from './region.mjs';
+import { REGION, bbox, mapped, projection } from './region.mjs';
 
 const KEY = process.env.VWORLD_KEY;
 if (!KEY) { console.error('Set VWORLD_KEY to a V-World API key (https://www.vworld.kr).'); process.exit(1); }
 const RAW = new URL('../data/raw/', import.meta.url);
 const [south, west, north, east] = bbox(REGION, 60);
-const COLS = 8, ROWS = 4, SIZE = 1000;           // the area is asked for in pieces: one request returns at most 1000 buildings
+const COLS = 24, ROWS = 24, SIZE = 1000;         // the area is asked for in pieces: one request returns at most 1000 buildings
+const { toLocal } = projection();
 
 async function page(box, n) {
   const url = `https://api.vworld.kr/req/data?service=data&request=GetFeature&data=LT_C_BLDGINFO&key=${KEY}&domain=localhost`
@@ -34,6 +35,9 @@ const seen = new Map();
 for (let j = 0; j < ROWS; j++) {
   for (let i = 0; i < COLS; i++) {
     const box = [west + (east - west) * i / COLS, south + (north - south) * j / ROWS, west + (east - west) * (i + 1) / COLS, south + (north - south) * (j + 1) / ROWS].map(v => v.toFixed(6));
+    // only the pieces that touch a mapped part: the rest of the rectangle has no buildings in the game
+    const [mx, mz] = toLocal((Number(box[1]) + Number(box[3])) / 2, (Number(box[0]) + Number(box[2])) / 2);
+    if (!mapped(mx, mz, REGION, 320)) continue;
     let count = 0;
     for (let n = 1, pages = 1; n <= pages; n++) {
       const got = await page(box, n);

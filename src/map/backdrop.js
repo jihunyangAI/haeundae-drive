@@ -33,8 +33,10 @@ export function buildBackdrop() {
   const group = new THREE.Group();
   // (not tone-mapped: their colour is matched to the fog, which is mixed in after tone mapping)
   const land = new THREE.MeshBasicMaterial({ color: 0x4f6a52, fog: false, toneMapped: false }), steel = new THREE.MeshBasicMaterial({ color: 0x8b949c, fog: false, toneMapped: false });
+  // (the hills north of the town, Jangsan among them, are in the map itself now: only what lies past its
+  // northern and western edges is made up here)
   const hills = new THREE.Group();
-  for (const [x, z, r, h, seed] of [[1500, -5700, 2600, 634, 7], [-1300, -5200, 2300, 430, 23], [4600, -5300, 2300, 400, 41], [7200, -2900, 1700, 300, 77]]) {
+  for (const [x, z, r, h, seed] of [[-4200, -6500, 2000, 420, 23], [2500, -12500, 2400, 520, 7], [7500, -12800, 2300, 450, 41]]) {
     hills.add(new THREE.Mesh(mountain(x, z, r, h, seed), land));
   }
 

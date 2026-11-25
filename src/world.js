@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { loadMap, pointInPolygon, boundsOf } from './map/data.js';
-import { buildTerrain, buildRoads, buildWalkways, buildWaterfront, tarmacMaterials, LAYER } from './map/meshes.js';
+import { buildTerrain, buildFarTerrain, buildRoads, buildWalkways, buildWaterfront, tarmacMaterials, LAYER } from './map/meshes.js';
 import { createStreetKit, buildStreets } from './map/street.js';
 import { createFacadeKit, buildFacades } from './map/facades.js';
 import { buildStructures, solidsOf } from './map/decks.js';
@@ -19,6 +19,7 @@ const EDGE_MARGIN = 6;    // invisible wall this far inside the edge of the map 
 const TALL = 30;          // buildings at least this high are drawn from far away
 const NEAR = 620;         // a zone gets its full detail when the car is this close (metres to its nearest edge)
 const LOW = 430;          // low buildings are shown only this close: further off, the ones in front hide them
+const KEEP = 500;         // a zone is let go when it is this much further off than where it would be built
 const FAR = 1900;         // and its ground, roads and tall buildings from this far
 
 // Everything the game needs from the map: the scene content, ground height, collisions and road lookup.
@@ -62,7 +63,7 @@ export async function createWorld(dir) {
   };
   group.add(sea);
   const backdrop = buildBackdrop(), seasonal = [];        // seasonal: what is only out on a fine day (parasols)
-  group.add(backdrop.group);
+  group.add(backdrop.group, buildFarTerrain(map, ground));
   let fine = true;
 
   const cellOf = v => Math.floor(v / CELL);
@@ -149,6 +150,7 @@ export async function createWorld(dir) {
     }
   };
   for (const road of map.roads) nearZones(boundsOf(road.p), road.w, z => z.roads.push(road));
+  for (const zone of zones) zone.empty = !zone.roads.length && map.isBare(zone.i, zone.j);
   for (const st of net.streets) nearZones(boundsOf(st.road.p), 70, z => z.streets.push(st));
 
   // ---------- collisions ----------
@@ -235,17 +237,20 @@ export async function createWorld(dir) {
 
   // ---------- building zones ----------
   const ctx = { map, ground, top: map.top, atlas, kit: streetKit, nearRoad, stops, walks };
-  const api = { onZone: null, timings: { far: [], near: [] } };   // onZone(buildings): a zone's buildings became solid. timings: ms per build
+  const api = { onZone: null, timings: { far: [], near: [] }, released: 0 };   // onZone(buildings): a zone's buildings became solid. timings: ms per build
 
   function buildFar(zone) {
     const began = performance.now();
     const d = zone.data, roads = buildRoads(zone.roads, map, zone.owns);
     Object.assign(zone, { areas: d.areas, lines: d.lines });
-    group.add(
+    zone.far = new THREE.Group();
+    zone.far.add(
       buildTerrain(zone, ground), roads, buildWalkways(zone.roads, map, zone.owns), buildWaterfront(zone, ground),
       buildStructures(map, zone, (x, z, road) => !nearRoad(x, z, 2, 'drive', road)),
       buildFacades(d.b.filter(b => b.h >= TALL), ground, facadeKit, zone.seed),
     );
+    group.add(zone.far);
+    zone.mirrorless = [roads];
     unmirrored.push(roads);
     zone.level = 1;
     if (conditions) setConditions(conditions);        // a road material made just now starts out dry
@@ -258,19 +263,29 @@ export async function createWorld(dir) {
     const streets = buildStreets(ctx, zone);
     if (streets.parked.length) streets.group.add(trafficKit.parkedMesh(streets.parked, ground));
     zone.low = buildFacades(d.b.filter(b => b.h < TALL), ground, facadeKit, zone.seed + 1000);
-    group.add(streets.group, zone.low);
-    for (const b of d.b) addSolid(b.p);
-    // poles and tree trunks: circles, kept in the same grid
-    for (const post of streets.posts) bucket(cells, cellOf(post.x), cellOf(post.z)).push({ ...post, seen: 0 });
-    posts.push(...streets.posts);
-    lamps.push(...streets.lamps);
+    zone.near = new THREE.Group();
+    zone.near.add(streets.group, zone.low);
+    group.add(zone.near);
+    // What is solid, and where the lamps stand, is kept for good once a zone has been built: it is small,
+    // and the same when the zone is built again after having been let go (see release()).
+    if (!zone.known) {
+      zone.known = true;
+      for (const b of d.b) addSolid(b.p);
+      // poles and tree trunks: circles, kept in the same grid
+      for (const post of streets.posts) bucket(cells, cellOf(post.x), cellOf(post.z)).push({ ...post, seen: 0 });
+      posts.push(...streets.posts);
+      lamps.push(...streets.lamps);
+      api.onZone?.(d.b);
+    }
+    zone.mirrorless.push(...streets.decals);
     unmirrored.push(...streets.decals);
+    zone.seasonal = streets.seasonal;
     for (const mesh of streets.seasonal) { mesh.visible = fine; seasonal.push(mesh); }
-    if (streets.signals.length) signalHeads.push(streets.signals);
+    zone.signals = streets.signals.length ? streets.signals : null;
+    if (zone.signals) signalHeads.push(zone.signals);
     signalStep = -1;
     zone.level = 2;
-    zone.data = null;                 // everything is in the scene now
-    api.onZone?.(d.b);
+    zone.data = zone.areas = zone.lines = zone.outlines = null;       // everything is in the scene now
     api.timings.near.push(Math.round(performance.now() - began));
   }
   // A zone that fails to download is asked for again a few seconds later.
@@ -279,16 +294,36 @@ export async function createWorld(dir) {
     setTimeout(() => { zone.fetching = null; }, 4000);
   });
   const gap = (zone, x, z) => Math.hypot(Math.max(zone.x0 - x, 0, x - zone.x1), Math.max(zone.z0 - z, 0, z - zone.z1));
+  // Let go of a zone left far behind: its meshes come off the scene and out of the graphics memory.
+  // Shapes shared by every zone (the instanced street furniture) and all materials are kept.
+  const remove = (list, items) => { for (const it of items || []) { const at = list.indexOf(it); if (at >= 0) list.splice(at, 1); } };
+  function release(zone) {
+    for (const part of [zone.far, zone.near]) {
+      if (!part) continue;
+      group.remove(part);
+      part.traverse(o => {
+        if (o.isInstancedMesh) o.dispose();
+        else if (o.geometry) o.geometry.dispose();      // (everything a zone shares with others is instanced, so this is its own)
+      });
+    }
+    remove(unmirrored, zone.mirrorless);
+    remove(seasonal, zone.seasonal);
+    if (zone.signals) remove(signalHeads, [zone.signals]);
+    Object.assign(zone, { far: null, near: null, low: null, mirrorless: null, seasonal: null, signals: null, level: 0, data: null, fetching: null, areas: null, lines: null, outlines: null });
+    api.released++;
+  }
 
   // Called every frame with the car's position. Fetches what is coming into range and builds at most
   // one zone level per call, nearest first, so a frame never has to build a whole neighbourhood.
-  let pending = 0;
+  let pending = 0, holdAll = false;
   function stream(x, z) {
     let job = null, best = Infinity;
     pending = 0;
     for (const zone of zones) {
-      const d = gap(zone, x, z), want = d < NEAR ? 2 : d < FAR ? 1 : 0;
+      // open country with no road through it is only built close by: further off the coarse ground does
+      const d = gap(zone, x, z), want = d < NEAR ? 2 : d < FAR && !zone.empty ? 1 : 0;
       if (zone.low) zone.low.visible = d < LOW;
+      if (zone.level > 0 && d > (zone.empty ? NEAR : FAR) + KEEP && !holdAll) { release(zone); continue; }
       if (zone.level >= want) continue;
       pending++;
       fetchZone(zone);
@@ -300,7 +335,9 @@ export async function createWorld(dir) {
   }
   // Fetch and build everything wanted around (x, z) before returning: used before the first frame.
   async function prepare(x, z, reach = NEAR) {
-    const wanted = zones.filter(zone => gap(zone, x, z) < reach);
+    if (reach === Infinity) holdAll = true;          // everything was asked for (the tests): nothing is let go again
+    // (asked for everything, open country with nothing on it is left out)
+    const wanted = zones.filter(zone => gap(zone, x, z) < reach && !(reach === Infinity && zone.empty));
     await Promise.all(wanted.map(fetchZone));
     for (const zone of wanted) {
       if (!zone.data && zone.level < 2) continue;         // failed to download: stream() picks it up when it arrives

@@ -7,7 +7,7 @@ import { snowable, wetRoad } from './shared.js';
 // A zone is { x0, z0, x1, z1, owns(x, z), areas, lines }. Long things that run through several zones
 // are built whole and then only the pieces a zone owns are kept, so neighbouring zones meet exactly.
 
-const AREA_COLOR = { park: 0x86b56f, pitch: 0x9cc47f, wood: 0x4f7f4a, beach: 0xdccfa6 };
+const AREA_COLOR = { park: 0x86b56f, pitch: 0x9cc47f, wood: 0x4f7f4a, beach: 0xdccfa6, farm: 0xa8b56a };
 const LAND = new THREE.Color(0xa9a69d), SHORE = new THREE.Color(0xcdc19c);
 const cache = new Map();
 const once = (key, make) => { if (!cache.has(key)) cache.set(key, make()); return cache.get(key); };
@@ -32,6 +32,27 @@ export function buildTerrain(zone, hAt) {
   const mesh = new THREE.Mesh(geo, once('terrain', () => snowable(new THREE.MeshLambertMaterial({ vertexColors: true }), 0.92)));
   mesh.receiveShadow = true;
   return mesh;
+}
+
+// The whole map's ground as one coarse sheet, for the distance: hills and shores beyond the zones that
+// are built in detail. It is kept a little under the true ground everywhere, so that where a zone is
+// built its own ground covers it.
+export function buildFarTerrain(map, hAt) {
+  const STEP = 40, nx = Math.round((map.x1 - map.x0) / STEP), nz = Math.round((map.z1 - map.z0) / STEP);
+  const geo = new THREE.PlaneGeometry(map.x1 - map.x0, map.z1 - map.z0, nx, nz).rotateX(-Math.PI / 2).translate((map.x0 + map.x1) / 2, 0, (map.z0 + map.z1) / 2);
+  const pos = geo.attributes.position, colors = new Float32Array(pos.count * 3), c = new THREE.Color(), WOOD = new THREE.Color(0x5d7f58);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i);
+    let low = Infinity;
+    for (let dx = -20; dx <= 20; dx += 10) for (let dz = -20; dz <= 20; dz += 10) low = Math.min(low, hAt(x + dx, z + dz));
+    pos.setY(i, low - 1.2);
+    // the hills are wooded; the low ground is town
+    c.copy(LAND).lerp(WOOD, Math.min(1, Math.max(0, (low - 35) / 60)));
+    c.toArray(colors, i * 3);
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.computeVertexNormals();
+  return new THREE.Mesh(geo, once('farTerrain', () => snowable(new THREE.MeshLambertMaterial({ vertexColors: true }), 0.92)));
 }
 
 // Split a flat [x, z, ...] polyline so no segment is longer than `step` metres.

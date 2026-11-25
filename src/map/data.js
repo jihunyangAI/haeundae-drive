@@ -85,7 +85,10 @@ export async function loadMap(dir) {
   map.levelAt = (x, z, y) => { const d = over(x, z); return !d ? 0 : d.deck.kind === 'bridge' ? (y < d.h - 2.2 ? 0 : 1) : y < d.h - 2.2 ? -1 : 0; };
 
   // { b: buildings, nb: outlines of neighbouring buildings, areas, lines } for zone column i, row j
-  map.loadZone = (i, j) => getJson(`${dir}z_${i}_${j}.json`);
+  // (a zone with nothing in it but the ground has no file)
+  const bare = new Set(map.meta.bare || []);
+  map.isBare = (i, j) => bare.has(j * map.meta.cols + i);
+  map.loadZone = (i, j) => (map.isBare(i, j) ? Promise.resolve({ b: [], nb: [], areas: [], lines: [] }) : getJson(`${dir}z_${i}_${j}.json`));
   return map;
 }
 

@@ -5,7 +5,7 @@
 
 import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import { PNG } from 'pngjs';
-import { REGION, projection, tileX, tileY } from './region.mjs';
+import { REGION, projection, mapped, tileX, tileY } from './region.mjs';
 
 const RAW = new URL('../data/raw/', import.meta.url);
 const OUT = new URL(`../public/map/${REGION.id}/`, import.meta.url);
@@ -27,7 +27,7 @@ function ring(geometry, open = false) {
   return { pts, closed };
 }
 const flat = pts => pts.flatMap(p => [r2(p[0]), r2(p[1])]);
-const inside = (x, z) => x >= X0 && x <= X1 && z >= Z0 && z <= Z1;
+const inside = (x, z) => x >= X0 && x <= X1 && z >= Z0 && z <= Z1 && mapped(x, z);       // where streets and buildings are mapped
 const inExtent = pts => pts.some(p => inside(p[0], p[1]));
 // Cut a polyline to the map rectangle (Liang-Barsky per segment). Returns the pieces that lie inside.
 function clipLine(pts) {
@@ -46,7 +46,27 @@ function clipLine(pts) {
     cur.push([a[0] + dx * t1, a[1] + dz * t1]);
     if (t1 < 1) cur = null;
   }
-  return pieces.filter(p => p.length > 1);
+  // ...and to the mapped parts of it: a line is kept from where it comes in to where it goes out
+  const kept = [];
+  for (const piece of pieces) {
+    // the point where the line between a mapped point and an unmapped one crosses the edge
+    const edge = (inPt, outPt) => {
+      let a = inPt, b = outPt;
+      for (let k = 0; k < 12; k++) { const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; if (mapped(mid[0], mid[1])) a = mid; else b = mid; }
+      return a;
+    };
+    let run = null;
+    piece.forEach((pt, i) => {
+      if (mapped(pt[0], pt[1])) {
+        if (!run) { kept.push(run = []); if (i > 0) run.push(edge(pt, piece[i - 1])); }
+        run.push(pt);
+      } else {
+        if (run) run.push(edge(piece[i - 1], pt));
+        run = null;
+      }
+    });
+  }
+  return kept.filter(p => p.length > 1);
 }
 const length = pts => pts.slice(1).reduce((s, p, i) => s + Math.hypot(p[0] - pts[i][0], p[1] - pts[i][1]), 0);
 const centroid = p => {
@@ -211,6 +231,7 @@ for (const e of osm) {
   const kind = t.leisure === 'park' || t.leisure === 'garden' ? 'park'
     : t.leisure === 'pitch' ? 'pitch'
     : t.natural === 'wood' || t.landuse === 'forest' ? 'wood'
+    : t.landuse === 'farmland' || t.landuse === 'orchard' || t.landuse === 'meadow' ? 'farm'
     : t.natural === 'beach' || t.natural === 'sand' ? 'beach'
     : t.natural === 'water' ? 'water'
     : t.natural === 'coastline' ? 'coast'
@@ -219,7 +240,8 @@ for (const e of osm) {
     : t.waterway ? t.waterway : null;
   if (!kind) continue;
   const { pts, closed } = ring(e.geometry, true);
-  if (!inExtent(pts)) continue;
+  // (woods, the shore and water are kept all over the rectangle, the rest where streets are mapped)
+  if (!pts.some(p => p[0] >= X0 && p[0] <= X1 && p[1] >= Z0 && p[1] <= Z1 && (['wood', 'coast', 'beach', 'water', 'farm'].includes(kind) || mapped(p[0], p[1])))) continue;
   const isLine = !closed || ['coast', 'tree_row', 'river', 'stream'].includes(kind);
   (isLine ? lines : areas).push({ k: kind, p: flat(isLine ? pts : pts.slice(0, -1)) });
 }
@@ -490,7 +512,7 @@ function addFillers() {
   }
   return count;
 }
-const mapped = buildings.length, fillers = register ? 0 : addFillers();       // with the register there is nothing to fill in
+const mappedCount = buildings.length, fillers = register ? 0 : addFillers();       // with the register there is nothing to fill in
 
 // ---------- zones ----------
 // A zone file lists everything that touches the zone, whole. What each zone draws is decided in the
@@ -541,13 +563,13 @@ const stats = {
     names: new Set(drive.map(r => r.n).filter(Boolean)).size,
   },
   buildings: {
-    mapped, fillers, heightSource: tally(buildings.filter(b => !b.f), b => b.hs),
+    mapped: mappedCount, fillers, heightSource: tally(buildings.filter(b => !b.f), b => b.hs),
     perZone: zones.map(z => z.b.length).join(' '),
     zonesWithNone: zones.filter(z => !z.b.length).length,
     tallest: [...buildings].sort((a, b) => b.h - a.h).slice(0, 6).map(b => ({ n: b.n, h: b.h })),
   },
   elevation: {
-    min: Math.min(...heights), max: Math.max(...heights), smoothMax: Math.max(...smooth),
+    min: heights.reduce((a, b) => Math.min(a, b), Infinity), max: heights.reduce((a, b) => Math.max(a, b), -Infinity), smoothMax: smooth.reduce((a, b) => Math.max(a, b), -Infinity),
     roadGradePct: { raw: roadGrades(heights), smooth: roadGrades(smooth), dalmaji: roadGrades(smooth, r => r.n.startsWith('달맞이')) },
   },
 };
@@ -558,6 +580,8 @@ const base = {
   meta: {
     id: REGION.id, name: REGION.name, center: { lat: REGION.lat, lon: REGION.lon }, mPerLat, mPerLon,
     rect: [X0, Z0, X1, Z1], zone: ZONE, cols: COLS, rows: ROWS,
+    // zones with nothing in them but the ground have no file: their numbers (row * cols + column)
+    bare: zones.map((z, n) => (z.b.length || z.nb.length || z.areas.length || z.lines.length ? -1 : n)).filter(n => n >= 0),
     attribution: `지도 데이터 © OpenStreetMap 기여자 (ODbL)${register ? ' · 건물: 국토교통부 GIS건물통합정보 (브이월드)' : ''} · 고도 데이터: Mapzen Terrain Tiles`,
   },
   height: { nx: NX, nz: NZ, cell: CELL, x0: X0, z0: Z0, smooth },
@@ -567,6 +591,11 @@ const base = {
 let bytes = 0;
 const save = async (name, data) => { const json = JSON.stringify(data); bytes += json.length; await writeFile(new URL(name, OUT), json); return json.length; };
 const baseSize = await save('base.json', base);
-for (const z of zones) await save(`z_${z.i}_${z.j}.json`, { b: z.b, nb: z.nb, areas: z.areas, lines: z.lines });
-console.log(`wrote public/map/${REGION.id}/: base ${(baseSize / 1024).toFixed(0)} KB, ${zones.length} zones, ${(bytes / 1024).toFixed(0)} KB in all`);
-console.log(JSON.stringify(stats, null, 1));
+let written = 0;
+for (const z of zones) {
+  if (!(z.b.length || z.nb.length || z.areas.length || z.lines.length)) continue;
+  await save(`z_${z.i}_${z.j}.json`, { b: z.b, nb: z.nb, areas: z.areas, lines: z.lines });
+  written++;
+}
+console.log(`wrote public/map/${REGION.id}/: base ${(baseSize / 1024).toFixed(0)} KB, ${written} zone files of ${zones.length} zones, ${(bytes / 1024).toFixed(0)} KB in all`);
+console.log(JSON.stringify({ ...stats, buildings: { ...stats.buildings, perZone: undefined } }, null, 1));
