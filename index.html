@@ -13,7 +13,7 @@
 
   <div id="menu" class="menu">
     <header class="brand">
-      <span class="kicker">PROTOTYPE 0.17</span>
+      <span class="kicker">PROTOTYPE 0.18</span>
       <h1>시티 드라이브</h1>
       <p>부산 해운대 마린시티에서 달맞이길까지. 차를 고르고 시내로 나가세요.</p>
     </header>
@@ -51,10 +51,18 @@
           <div id="quality-list" class="choices"></div>
         </div>
         <div class="group">
+          <h2>길 안내</h2>
+          <div class="selects">
+            <label>출발 <select id="start-place"></select></label>
+            <label>목적지 <select id="dest-place"></select></label>
+          </div>
+        </div>
+        <div class="group">
           <h2>라디오</h2>
           <div class="choices">
             <button id="my-music">내 음악 불러오기</button>
             <button id="credits-open">크레딧</button>
+            <button id="keys-open">조작법</button>
             <input id="my-files" type="file" accept="audio/*" multiple hidden>
           </div>
         </div>
@@ -76,6 +84,7 @@
         <span id="limit" class="limit">50</span>
         <span id="road-name"></span>
         <span id="sky-chip" class="sky-chip"></span>
+        <span id="guide-chip" class="sky-chip is-hidden"></span>
       </div>
       <canvas id="minimap" width="180" height="180"></canvas>
     </div>
@@ -89,12 +98,42 @@
       <span id="radio-station"></span>
       <span id="radio-track"></span>
     </div>
-    <div class="help">
-      <b>W/S</b> 가속·브레이크(정지 후 S 후진) <b>A/D</b> 조향 <b>Space</b> 핸드브레이크
-      <b>C</b> 시점(추적·운전석·보닛) <b>마우스 드래그</b> 둘러보기 <b>U</b> 운전석 화면 정보 <b>T</b> 시간 <b>Y</b> 날씨 <b>,</b> <b>.</b> 라디오 채널 <b>-</b> <b>=</b> 음악 음량 <b>L</b> 라이트 <b>Q</b> <b>E</b> 방향지시등 <b>F</b> 비상등 <b>H</b> 경적 <b>R</b> 출발점으로 <b>M</b> 음소거 <b>Esc</b> 메뉴
-    </div>
+    <div class="help"><b>W/S</b> 가속·브레이크 <b>A/D</b> 조향 <b>C</b> 시점 <b>N</b> 목적지 <b>P</b> 사진 <b>Esc</b> 메뉴 <b>?</b> 조작법 전체</div>
   </div>
 
+  <div id="toast" class="toast is-hidden"></div>
+  <div id="photo" class="photo is-hidden">
+    <span><b>사진 모드</b> 드래그: 돌려 보기 · 휠: 거리 · <b>T</b> 시간 · <b>Y</b> 날씨</span>
+    <button id="photo-save">저장 <kbd>Enter</kbd></button>
+    <button id="photo-close">돌아가기 <kbd>P</kbd></button>
+  </div>
+  <div id="keys" class="credits is-hidden">
+    <div class="credits-box">
+      <h2>조작법</h2>
+      <table class="keys">
+        <tr><th>W / S, ↑ / ↓</th><td>가속 · 브레이크 (멈춘 뒤 S: 후진)</td></tr>
+        <tr><th>A / D, ← / →</th><td>조향</td></tr>
+        <tr><th>Space</th><td>핸드브레이크</td></tr>
+        <tr><th>Q / E / F</th><td>왼쪽 · 오른쪽 방향지시등 · 비상등</td></tr>
+        <tr><th>H</th><td>경적</td></tr>
+        <tr><th>L</th><td>전조등</td></tr>
+        <tr><th>C</th><td>시점 (추적 · 운전석 · 보닛)</td></tr>
+        <tr><th>마우스 드래그</th><td>둘러보기</td></tr>
+        <tr><th>U</th><td>운전석에서도 화면 정보 보기</td></tr>
+        <tr><th>T / Y</th><td>시간 · 날씨 바꾸기</td></tr>
+        <tr><th>N</th><td>다음 목적지 (길 안내)</td></tr>
+        <tr><th>P</th><td>사진 모드</td></tr>
+        <tr><th>, / .</th><td>라디오 채널</td></tr>
+        <tr><th>- / =</th><td>음악 음량</td></tr>
+        <tr><th>M</th><td>소리 끄기</td></tr>
+        <tr><th>R</th><td>출발 위치로 돌아가기</td></tr>
+        <tr><th>Esc</th><td>메뉴</td></tr>
+        <tr><th>F1 또는 ?</th><td>이 화면</td></tr>
+      </table>
+      <p class="note">게임패드: 오른쪽·왼쪽 트리거 가속·브레이크, 왼쪽 스틱 조향, 오른쪽 스틱 둘러보기, LB·RB 방향지시등, Y 비상등, A 핸드브레이크, 왼쪽 스틱 누르기 경적. 부딪히거나 급정지하면 진동합니다.</p>
+      <button id="keys-close">닫기</button>
+    </div>
+  </div>
   <canvas id="glass" class="glass" hidden></canvas>
   <div id="credits" class="credits is-hidden">
     <div class="credits-box">

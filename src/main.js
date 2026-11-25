@@ -11,6 +11,7 @@ import { createAtmosphere, TIMES, WEATHERS } from './atmosphere.js';
 import { Windshield } from './windshield.js';
 import { Ambience } from './ambience.js';
 import { createSpray } from './spray.js';
+import { createGuide } from './guide.js';
 import { createRoadReflection } from './reflection.js';
 import { Radio } from './radio.js';
 import { ENV } from './map/shared.js';
@@ -91,8 +92,14 @@ function updateTraffic(dt) {
 const solids = { query(x, z, r, cb) { world.query(x, z, r, cb, car.y); traffic.query(x, z, r, cb, car.y); people.query(x, z, r, cb); } };
 
 // ---------- car ----------
-const spawn = world.spawnOn(START_STREET);
-let carIndex = 1, colorIndex = 0, car = null;
+// Settings kept in the browser from one visit to the next (nothing is sent anywhere).
+const SAVE_KEY = 'haeundae-drive:1';
+const saved = (() => { try { return JSON.parse(localStorage.getItem(SAVE_KEY)) || {}; } catch { return {}; } })();
+const guide = createGuide(world.map);
+let spawn = world.spawnOn(START_STREET);        // where R puts the car back
+// (what is read back is checked: a damaged entry must not stop the game from starting)
+const indexIn = (v, list, otherwise) => (Number.isInteger(v) && v >= 0 && v < list.length ? v : otherwise);
+let carIndex = indexIn(saved.car, CARS, 1), colorIndex = indexIn(saved.color, COLORS, 0), car = null;
 
 function selectCar(index) {
   const at = car ? { x: car.x, z: car.z, heading: car.heading } : spawn;
@@ -188,7 +195,7 @@ function setQuality(choice, level = choice === 'auto' ? guessQuality() : choice)
   $('#quality-list').innerHTML = [['auto', `자동 (${quality.name})`], ...ORDER.map(k => [k, QUALITY[k].name])].map(([k, label]) =>
     `<button class="${k === choice ? 'on' : ''}" data-quality="${k}">${choice !== 'auto' && k === 'auto' ? '자동' : label}</button>`).join('');
 }
-$('#quality-list').addEventListener('click', e => e.target.dataset.quality && setQuality(e.target.dataset.quality));
+$('#quality-list').addEventListener('click', e => { if (e.target.dataset.quality) { setQuality(e.target.dataset.quality); save(); } });
 // in "auto", a few seconds below this frame rate while driving drops one level
 const SLOW_FPS = 27;
 let slowFor = 0, fpsSmooth = 60;
@@ -201,6 +208,8 @@ function watchFrameRate(dt) {
 }
 
 const glass = new Windshield($('#glass'));
+// photo mode: the camera circles the car where the mouse puts it
+const photo = { yaw: 0, pitch: 0.18, dist: 8, shoot: false };
 const VIEWS = ['chase', 'cockpit', 'bonnet'];
 let state = 'menu', view = 'chase', lights = false, camYaw = spawn.heading, orbit = 0.6, frames = 0;
 let hudAlways = false;                  // show the on-screen instruments in the driver's seat too
@@ -213,6 +222,15 @@ function setSky(choice) {
   renderMenu();
 }
 const cycle = (list, current) => list[(list.indexOf(current) + 1) % list.length].id;
+
+// A shake of the gamepad, where it has motors. strength 0..1, for so many milliseconds.
+let rumbleUntil = 0;
+function rumble(strength, ms) {
+  if (performance.now() < rumbleUntil) return;         // one shake at a time
+  rumbleUntil = performance.now() + ms;
+  const pad = navigator.getGamepads?.().find(p => p);
+  pad?.vibrationActuator?.playEffect?.('dual-rumble', { duration: ms, strongMagnitude: strength, weakMagnitude: strength * 0.6 })?.catch?.(() => {});
+}
 
 // One simulation step: controls, physics at 240 Hz, collisions, ground following.
 function update(dt, inp) {
@@ -240,7 +258,9 @@ function update(dt, inp) {
     car.vf *= keep;
     car.vl *= keep;
   }
-  car.collide(solids);
+  const impact = car.collide(solids);
+  if (impact > 1.5) rumble(Math.min(1, impact / 9), 160);
+  if (halt && speed > 3) rumble(0.5, 120);
   car.y = world.surface(car.x, car.z, height);
   car.placed = true;
 }
@@ -285,7 +305,12 @@ function updateCamera(dt) {
   look.yaw = Math.max(-wide, Math.min(wide, look.yaw));
   look.pitch = Math.max(view === 'chase' ? -0.2 : -0.6, Math.min(view === 'chase' ? 0.9 : 0.6, look.pitch));
   let fov = 45;
-  if (state === 'menu') {
+  if (state === 'photo') {
+    const flat = Math.cos(photo.pitch) * photo.dist, cx = p.x + Math.sin(photo.yaw) * flat, cz = p.z + Math.cos(photo.yaw) * flat;
+    camera.position.set(cx, Math.max(p.y + 0.9 + Math.sin(photo.pitch) * photo.dist, world.surface(cx, cz, car.y) + 0.4), cz);
+    camera.lookAt(p.x, p.y + 0.8, p.z);
+    fov = 40;
+  } else if (state === 'menu') {
     orbit += dt * 0.2;
     const pose = window.__game?.pose, angle = pose ? car.heading + pose.angle : orbit, dist = pose?.dist ?? 7.4;
     camera.position.set(p.x + Math.sin(angle) * dist, p.y + (pose?.height ?? 2.1), p.z + Math.cos(angle) * dist);
@@ -351,7 +376,30 @@ function drawMinimap() {
   mini.strokeStyle = '#e8eaed';
   mini.lineWidth = 11;
   mini.stroke(paths.major);
+  if (guide.route) {
+    const r = guide.route;
+    mini.strokeStyle = '#3aa0ff';
+    mini.lineWidth = 9;
+    mini.beginPath();
+    mini.moveTo(r[0][0], r[0][1]);
+    for (let i = 1; i < r.length; i++) mini.lineTo(r[i][0], r[i][1]);
+    mini.stroke();
+  }
   mini.setTransform(1, 0, 0, 1, MINI / 2, MINI / 2);
+  if (guide.goal) {
+    // the goal as a pin: where it is, or on the rim of the map in its direction if it is off it
+    const dx = guide.goal.x - car.x, dz = guide.goal.z - car.z, c = Math.cos(car.heading + Math.PI), s = Math.sin(car.heading + Math.PI);
+    let px = (dx * c - dz * s) * MINI_SCALE, py = (dx * s + dz * c) * MINI_SCALE;
+    const far = Math.hypot(px, py), rim = MINI / 2 - 10;
+    if (far > rim) { px *= rim / far; py *= rim / far; }
+    mini.fillStyle = '#3aa0ff';
+    mini.strokeStyle = '#fff';
+    mini.lineWidth = 2;
+    mini.beginPath();
+    mini.arc(px, py, 6, 0, Math.PI * 2);
+    mini.fill();
+    mini.stroke();
+  }
   mini.fillStyle = '#ffb547';
   mini.beginPath();
   mini.moveTo(0, -9);
@@ -380,8 +428,61 @@ function updateHud(dt) {
     hud.road.textContent = road?.name || (road ? '이름 없는 길' : '도로 밖');
     hud.limit.dataset.over = road && kmh > road.limit + 5 ? '1' : '';
   }
+  // the way to the place chosen
+  const reached = guide.update(dt, car);
+  if (reached) { toast(`${reached.name} 도착`); renderPlaces(); save(); }
+  $('#guide-chip').classList.toggle('is-hidden', !guide.goal);
+  if (guide.goal) $('#guide-chip').textContent = `→ ${guide.goal.name} ${guide.left >= 950 ? `${(guide.left / 1000).toFixed(1)}km` : `${Math.round(guide.left / 10) * 10}m`}`;
   drawMinimap();
 }
+
+// a line of text in the middle of the screen for a few seconds
+let toastTimer = 0;
+function toast(text) {
+  $('#toast').textContent = text;
+  $('#toast').classList.remove('is-hidden');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $('#toast').classList.add('is-hidden'), 3200);
+}
+
+// ---------- places: where to set off from and where to go ----------
+function renderPlaces() {
+  $('#start-place').innerHTML = `<option value="">지금 있는 곳</option>${guide.places.map(p => `<option value="${p.id}">${p.name}</option>`).join('')}`;
+  $('#dest-place').innerHTML = `<option value="">없음</option>${guide.places.map(p => `<option value="${p.id}" ${guide.goal === p ? 'selected' : ''}>${p.name}</option>`).join('')}`;
+}
+function setGoal(id) {
+  const place = guide.places.find(p => p.id === id);
+  if (place && Math.hypot(place.x - car.x, place.z - car.z) < 60) { toast(`${place.name}: 이미 여기입니다`); id = null; }
+  guide.set(id);
+  renderPlaces();
+  save();
+}
+$('#dest-place').addEventListener('change', e => setGoal(e.target.value || null));
+$('#start-place').addEventListener('change', async e => {
+  const place = guide.places.find(p => p.id === e.target.value);
+  if (!place) return;
+  spawn = place.start;
+  await world.prepare(spawn.x, spawn.z);
+  car.reset(spawn.x, spawn.z, spawn.heading);
+  car.y = world.surface(spawn.x, spawn.z);
+  camYaw = spawn.heading;
+  trafficFilled = peopleFilled = false;
+  save();
+});
+
+// ---------- keeping the settings ----------
+function save() {
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify({
+      car: carIndex, color: colorIndex, quality: qualityChoice, traffic: trafficLevel, goal: guide.goal?.id || null,
+      volumes: { engine: sound.volumes.engine, rain: sound.volumes.rain, street: ambience.volume, music: radio.volume },
+      at: { x: Math.round(car.x * 10) / 10, z: Math.round(car.z * 10) / 10, y: Math.round(car.y * 10) / 10, heading: Math.round(car.heading * 100) / 100 },
+    }));
+  } catch { /* storage switched off or full: the game goes on without it */ }
+}
+addEventListener('pagehide', save);
+document.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
+setInterval(() => { if (state === 'drive') save(); }, 5000);
 
 // ---------- menu ----------
 function renderMenu() {
@@ -401,24 +502,29 @@ function renderMenu() {
 $('#time-list').addEventListener('click', e => e.target.dataset.time && setSky({ time: e.target.dataset.time }));
 $('#weather-list').addEventListener('click', e => e.target.dataset.weather && setSky({ weather: e.target.dataset.weather }));
 const setTraffic = level => { trafficLevel = level; if (level === 'none') { traffic.clear(); people.clear(); } trafficFilled = peopleFilled = false; renderMenu(); };
-$('#traffic-list').addEventListener('click', e => e.target.dataset.traffic && setTraffic(e.target.dataset.traffic));
+$('#traffic-list').addEventListener('click', e => { if (e.target.dataset.traffic) { setTraffic(e.target.dataset.traffic); save(); } });
 $('#car-list').addEventListener('click', e => {
   const card = e.target.closest('[data-car]');
   if (!card) return;
   selectCar(Number(card.dataset.car));
   renderMenu();
+  save();
 });
 $('#color-list').addEventListener('click', e => {
   if (e.target.dataset.color === undefined) return;
   colorIndex = Number(e.target.dataset.color);
   car.vis.setColour(COLORS[colorIndex]);
   renderMenu();
+  save();
 });
 
 function setState(next) {
   state = next;
   $('#menu').classList.toggle('is-hidden', next !== 'menu');
   $('#hud').classList.toggle('is-hidden', next !== 'drive');
+  $('#photo').classList.toggle('is-hidden', next !== 'photo');
+  if (next === 'photo') Object.assign(photo, { yaw: car.heading + Math.PI * 0.8, pitch: 0.18, dist: 8, shoot: false });
+  if (next === 'menu') renderPlaces();
   if (next !== 'drive') { sound.horn(false); stopping.show = stopping.horn = stopping.quiet = 0; $('#alert').classList.add('is-hidden'); }
   look.drag = false;
   if (next === 'drive') {
@@ -437,6 +543,9 @@ $('#vol-engine').addEventListener('input', e => { sound.volumes.engine = e.targe
 $('#vol-rain').addEventListener('input', e => { sound.volumes.rain = e.target.value / 100; });
 $('#vol-street').addEventListener('input', e => { ambience.volume = e.target.value / 100; });
 $('#vol-music').addEventListener('input', e => { radio.volume = e.target.value / 100; });
+for (const id of ['engine', 'rain', 'street', 'music']) $(`#vol-${id}`).addEventListener('change', save);
+$('#keys-open').addEventListener('click', () => $('#keys').classList.remove('is-hidden'));
+$('#keys-close').addEventListener('click', () => $('#keys').classList.add('is-hidden'));
 $('#my-music').addEventListener('click', () => $('#my-files').click());
 $('#my-files').addEventListener('change', e => { radio.addFiles(e.target.files); e.target.value = ''; });
 $('#credits-open').addEventListener('click', () => $('#credits').classList.remove('is-hidden'));
@@ -453,10 +562,22 @@ addEventListener('drop', e => {
 });
 
 addEventListener('keydown', e => {
-  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+  const typing = /^(SELECT|INPUT|BUTTON|A)$/.test(e.target?.tagName || '');           // a control of the menu has the keyboard
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code) && !(state === 'menu' && typing)) e.preventDefault();
   if (e.repeat) return;
+  // Esc first closes whatever is open on top
+  const open = [...document.querySelectorAll('.credits')].find(el => !el.classList.contains('is-hidden'));
+  if (open && e.code === 'Escape') { open.classList.add('is-hidden'); return; }
+  if (e.code === 'F1' || e.key === '?' || (e.code === 'Slash' && e.shiftKey)) { e.preventDefault(); $('#keys').classList.toggle('is-hidden'); return; }
   if (state === 'menu') {
-    if (e.code === 'Enter') setState('drive');
+    if (e.code === 'Enter' && !/^(SELECT|INPUT)$/.test(e.target?.tagName || '') && !open) setState('drive');
+    return;
+  }
+  if (state === 'photo') {
+    if (e.code === 'KeyP' || e.code === 'Escape') setState('drive');
+    else if (e.code === 'Enter') photo.shoot = true;
+    else if (e.code === 'KeyT') setSky({ time: cycle(TIMES, atmosphere.time) });
+    else if (e.code === 'KeyY') setSky({ weather: cycle(WEATHERS, atmosphere.weather) });
     return;
   }
   keys.add(e.code);
@@ -476,17 +597,32 @@ addEventListener('keydown', e => {
     $('#vol-music').value = Math.round(radio.volume * 100);
   }
   else if (e.code === 'KeyR') { car.reset(spawn.x, spawn.z, spawn.heading); car.y = world.surface(spawn.x, spawn.z); camYaw = spawn.heading; }
+  else if (e.code === 'KeyP') setState('photo');
+  else if (e.code === 'KeyN') {
+    // the next place in the list, then none
+    const at = guide.places.indexOf(guide.goal), next = guide.places[at + 1];
+    if (next) toast(`목적지: ${next.name}`); else toast('길 안내 끝');
+    setGoal(next ? next.id : null);
+  }
   else if (e.code === 'Escape') setState('menu');
 });
 addEventListener('keyup', e => keys.delete(e.code));
-addEventListener('mousedown', e => { if (state === 'drive' && e.button === 0 && !e.target.closest?.('button, a, input, .credits')) look.drag = true; });
+addEventListener('mousedown', e => { if ((state === 'drive' || state === 'photo') && e.button === 0 && !e.target.closest?.('button, a, input, .credits')) look.drag = true; });
 addEventListener('mouseup', () => { look.drag = false; });
 addEventListener('mousemove', e => {
   if (!(e.buttons & 1)) look.drag = false;      // the button was let go somewhere the page could not see
   if (!look.drag) return;
+  if (state === 'photo') {
+    photo.yaw -= e.movementX * 0.006;
+    photo.pitch = Math.max(-0.05, Math.min(1.3, photo.pitch + e.movementY * 0.004));
+    return;
+  }
   look.yaw -= e.movementX * 0.004;
   look.pitch -= e.movementY * 0.003;
 });
+addEventListener('wheel', e => { if (state === 'photo' && !e.ctrlKey) photo.dist = Math.max(3.5, Math.min(60, photo.dist * Math.exp(Math.max(-120, Math.min(120, e.deltaY)) * 0.0012))); }, { passive: true });
+$('#photo-save').addEventListener('click', () => { photo.shoot = true; });
+$('#photo-close').addEventListener('click', () => setState('drive'));
 addEventListener('blur', () => { keys.clear(); sound.horn(false); look.drag = false; });
 // with the page out of sight nothing is updated, so the sound is stopped rather than left hanging on its last note
 document.addEventListener('visibilitychange', () => {
@@ -504,7 +640,7 @@ function resize() {
   camera.updateProjectionMatrix();
 }
 addEventListener('resize', resize);
-setQuality('auto');
+setQuality(['auto', ...ORDER].includes(saved.quality) ? saved.quality : 'auto');
 setSky({ instant: true });
 
 // ---------- the sounds of the street, and what the weather does around the car ----------
@@ -582,6 +718,32 @@ function updateAmbience(dt, inside) {
   });
 }
 
+// ---------- what was saved last time ----------
+if (TRAFFIC.some(t => t[0] === saved.traffic)) trafficLevel = saved.traffic;
+for (const [id, set] of [['engine', v => { sound.volumes.engine = v; }], ['rain', v => { sound.volumes.rain = v; }], ['street', v => { ambience.volume = v; }], ['music', v => { radio.volume = v; }]]) {
+  const v = saved.volumes?.[id];
+  if (typeof v === 'number' && v >= 0 && v <= 1) { set(v); $(`#vol-${id}`).value = Math.round(v * 100); }
+}
+if (saved.goal) guide.set(saved.goal);
+{
+  // back where the car was left, if that is still a place on a road of this map
+  const at = saved.at, m = world.map;
+  // (its height tells the underpass from the street over it; without one it is put on top)
+  const y = at && Number.isFinite(at.y) ? at.y : undefined;
+  if (at && [at.x, at.z, at.heading].every(Number.isFinite) && at.x > m.x0 + 10 && at.x < m.x1 - 10 && at.z > m.z0 + 10 && at.z < m.z1 - 10 && world.roadAt(at.x, at.z, 12, y)) {
+    try {
+      await world.prepare(at.x, at.z);
+      const heading = Math.atan2(Math.sin(at.heading), Math.cos(at.heading));
+      car.reset(at.x, at.z, heading);
+      car.y = world.surface(at.x, at.z, y);
+      car.placed = y !== undefined;
+      camYaw = heading;
+    } catch (error) { console.warn('could not go back to the saved place', error); }
+  }
+}
+renderMenu();
+renderPlaces();
+
 const camVelocity = new THREE.Vector3(), camBefore = new THREE.Vector3();
 let last = performance.now();
 renderer.setAnimationLoop(now => {
@@ -593,7 +755,7 @@ renderer.setAnimationLoop(now => {
   car.sync(dt, lights, atmosphere.glow, atmosphere.wet);
   if (car.blinkOn !== blinking && state === 'drive') sound.tick(car.blinkOn);
   world.update(now / 1000);
-  updateTraffic(dt);
+  if (state !== 'photo') updateTraffic(dt);         // a photograph is of a moment: the street holds still
   world.stream(car.x, car.z);
   camBefore.copy(camera.position);
   updateCamera(dt);
@@ -630,6 +792,19 @@ renderer.setAnimationLoop(now => {
   if (quality.reflections && atmosphere.wet > 0.02) reflection.render(camera, car.y + 0.03, [...world.unmirrored, ...atmosphere.particles, car.vis.beam]);
   bloom.strength = quality.bloom ? 0.28 * atmosphere.glow : 0;
   if (bloom.strength > 0.02) composer.render(); else renderer.render(scene, camera);
+  if (photo.shoot && state === 'photo') {
+    // the picture just drawn, saved as a file (it has to be taken before the browser shows the frame)
+    photo.shoot = false;
+    renderer.domElement.toBlob(blob => {
+      if (!blob) return;
+      const link = document.createElement('a'), t = new Date(), two = n => String(n).padStart(2, '0');
+      link.href = URL.createObjectURL(blob);
+      link.download = `haeundae-drive-${t.getFullYear()}${two(t.getMonth() + 1)}${two(t.getDate())}-${two(t.getHours())}${two(t.getMinutes())}${two(t.getSeconds())}.png`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+      toast('사진을 저장했습니다');
+    }, 'image/png');
+  }
 });
 
 // Handle for automated checks: runs the simulation without rendering. input(t) returns the controls at time t.
@@ -637,7 +812,7 @@ window.__game = {
   crowd: null,                                // a number here overrides how many people are about, for measuring
   pose: null,                                 // { angle, dist, height, fov }: holds the menu camera still, for pictures of the car
   readyMs: Math.round(performance.now()),     // time from opening the page to being playable
-  world, scene, camera, renderer, setState, setQuality, get quality() { return `${qualityChoice}:${qualityLevel}`; }, selectCar, setSky, atmosphere, radio, sound, ambience, spray, heard,
+  world, scene, camera, renderer, setState, setQuality, get quality() { return `${qualityChoice}:${qualityLevel}`; }, selectCar, setSky, atmosphere, radio, sound, ambience, spray, heard, guide, photo, save, get state() { return state; },
   get car() { return car; },
   setView(next) { view = next; },
   traffic, trafficView, setTraffic, people, peopleView,
