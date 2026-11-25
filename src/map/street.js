@@ -9,6 +9,7 @@ import { snowable } from './shared.js';
 
 const KERBED = /^(trunk|primary|secondary|tertiary|residential|unclassified|living_street)$/;
 const SIDEWALK_W = 3;
+const PARASOLS = [0xd94f3d, 0x2f6fb5, 0xf0c33c, 0x3f9b6b, 0xf2f0ea, 0xe7862e].map(c => new THREE.Color(c));
 export const LAMP_COLOURS = { red: 0xff2a1a, amber: 0xffb000, green: 0x18e07a, arrow: 0x18e07a, walkRed: 0xff2a1a, walkGreen: 0x18e07a, count: 0x18e07a };
 const WIRED = /^(residential|living_street|unclassified)$/;     // streets with overhead lines and speed bumps
 
@@ -38,6 +39,9 @@ export function createStreetKit(atlas) {
     crown: [new THREE.IcosahedronGeometry(1, 1), snowable(new THREE.MeshStandardMaterial({ roughness: 0.9, flatShading: true }), 0.6)],
   };
   kinds.cover = [new THREE.CylinderGeometry(1, 1, 1, 14), new THREE.MeshStandardMaterial({ color: 0x2c2e31, roughness: 0.55, metalness: 0.6 })];      // manhole covers
+  // beach parasols
+  kinds.parasol = [new THREE.ConeGeometry(1, 1, 10), new THREE.MeshStandardMaterial({ roughness: 0.85, side: THREE.DoubleSide })];
+  kinds.parasolPole = [cylinder, new THREE.MeshStandardMaterial({ color: 0xe6e6e0, roughness: 0.6 })];
   kinds.lamp = [new THREE.CircleGeometry(1, 16), signalLamp];
   kinds.arrowLamp = [new THREE.ShapeGeometry(arrow), signalLamp];
   kinds.barLamp = [new THREE.PlaneGeometry(1, 1), signalLamp];
@@ -570,8 +574,24 @@ export function buildStreets(ctx, zone) {
     }
   }
 
+  // ---------- parasols on the beach (the game shows them on fine days only) ----------
+  for (const a of zone.areas) {
+    if (a.k !== 'beach') continue;
+    // the part of the beach that lies in this zone
+    const box = boundsOf(a.p), x0 = Math.max(box[0], zone.x0), z0 = Math.max(box[1], zone.z0), x1 = Math.min(box[2], zone.x1), z1 = Math.min(box[3], zone.z1);
+    const n = x1 > x0 && z1 > z0 ? Math.min(400, Math.round((x1 - x0) * (z1 - z0) / 70)) : 0;
+    for (let k = 0; k < n; k++) {
+      const x = x0 + grit() * (x1 - x0), z = z0 + grit() * (z1 - z0), tone = PARASOLS[Math.floor(grit() * PARASOLS.length)];
+      if (!owns(x, z) || !pointInPolygon(x, z, a.p) || !map.isLand(x, z) || nearRoad(x, z, 3, 'any')) continue;
+      const y = ctx.ground(x, z);
+      if (y < 1.35) continue;                       // not in the wash
+      put('parasol', x, y + 2.05, z, grit() * 6.28, 1.25, 0.42, 1.25, tone);
+      put('parasolPole', x, y + 1.0, z, 0, 0.025, 2.0, 0.025);
+    }
+  }
+
   // ---------- meshes ----------
-  const group = new THREE.Group();
+  const group = new THREE.Group(), seasonal = [];
   const lie = (x, z, it) => (it.low ? ctx.ground(x, z) : ctx.top(x, z));
   const paintY = (x, z, it) => lie(x, z, it) + LAYER.mark;
   // long lines are cut where the zone ends; short pieces (dashes, crossings) were already chosen whole
@@ -590,6 +610,7 @@ export function buildStreets(ctx, zone) {
     mesh.castShadow = name === 'crown' || name === 'cone' || name === 'trunk' || name === 'pole' || name === 'concrete';
     mesh.receiveShadow = name === 'crown' || name === 'cone';
     list.forEach((it, i) => { if (it.lamp) signals.push({ mesh, i, ...it.lamp }); });
+    if (name.startsWith('parasol')) seasonal.push(mesh);
     group.add(mesh);
   }
   group.add(signs.build(kit.signs));
@@ -614,5 +635,5 @@ export function buildStreets(ctx, zone) {
     group.add(poolMesh, haloMesh);
     decals.push(poolMesh);
   }
-  return { group, posts, lamps, decals, signals, parked };
+  return { group, posts, lamps, decals, signals, parked, seasonal };
 }

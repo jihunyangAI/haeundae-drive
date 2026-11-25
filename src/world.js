@@ -4,6 +4,7 @@ import { buildTerrain, buildRoads, buildWalkways, buildWaterfront, tarmacMateria
 import { createStreetKit, buildStreets } from './map/street.js';
 import { createFacadeKit, buildFacades } from './map/facades.js';
 import { buildStructures, solidsOf } from './map/decks.js';
+import { buildBackdrop } from './map/backdrop.js';
 import { analyseStreets, limitOf, levelOf } from './map/network.js';
 import { buildLaneGraph, signalState, lampLit } from './map/lanes.js';
 import { LAMP_COLOURS } from './map/street.js';
@@ -35,7 +36,34 @@ export async function createWorld(dir) {
     new THREE.MeshStandardMaterial({ color: 0x2f6f96, roughness: 0.25, metalness: 0.1 }),
   );
   sea.receiveShadow = true;
+  // Waves: the surface stays flat, but the way it catches the light moves - a few trains of ripples
+  // crossing each other, worked out from where each point of the water is.
+  const seaTime = { value: 0 };
+  sea.material.onBeforeCompile = shader => {
+    shader.uniforms.uSeaTime = seaTime;
+    shader.vertexShader = `varying vec3 vSeaAt;\n${shader.vertexShader}`.replace('#include <begin_vertex>', '#include <begin_vertex>\n  vSeaAt = (modelMatrix * vec4(position, 1.0)).xyz;');
+    shader.fragmentShader = `uniform float uSeaTime;\nvarying vec3 vSeaAt;\n${shader.fragmentShader}`.replace(
+      '#include <normal_fragment_begin>',
+      `#include <normal_fragment_begin>
+  {
+    vec2 q = vSeaAt.xz, slope = vec2(0.0);
+    float swell = 0.0;
+    slope += vec2(0.92, 0.39) * cos(dot(q, vec2(0.92, 0.39)) * 0.21 + uSeaTime * 0.9) * 0.10;
+    slope += vec2(-0.45, 0.89) * cos(dot(q, vec2(-0.45, 0.89)) * 0.37 + uSeaTime * 1.3) * 0.08;
+    slope += vec2(0.31, -0.95) * cos(dot(q, vec2(0.31, -0.95)) * 0.83 + uSeaTime * 2.1) * 0.07;
+    slope += vec2(0.71, 0.71) * cos(dot(q, vec2(0.71, 0.71)) * 1.9 + uSeaTime * 3.2) * 0.05;
+    swell = sin(dot(q, vec2(0.92, 0.39)) * 0.21 + uSeaTime * 0.9) + sin(dot(q, vec2(-0.45, 0.89)) * 0.37 + uSeaTime * 1.3);
+    // ripples flatten out with distance, where they would only flicker
+    float calm = 1.0 / (1.0 + length(vViewPosition) * 0.004);
+    normal = normalize((viewMatrix * vec4(normalize(vec3(-slope.x * calm, 1.0, -slope.y * calm)), 0.0)).xyz);
+    diffuseColor.rgb *= 1.0 + 0.06 * swell * calm;
+  }`,
+    );
+  };
   group.add(sea);
+  const backdrop = buildBackdrop(), seasonal = [];        // seasonal: what is only out on a fine day (parasols)
+  group.add(backdrop.group);
+  let fine = true;
 
   const cellOf = v => Math.floor(v / CELL);
   const bucket = (grid, i, j) => {
@@ -135,6 +163,7 @@ export async function createWorld(dir) {
   }
   let signalStep = -1, signalTime = 0;
   function updateSignals(time) {
+    seaTime.value = time % 3600;
     const step = Math.floor(time * 4);
     if (step === signalStep) return;
     signalStep = step;
@@ -236,6 +265,7 @@ export async function createWorld(dir) {
     posts.push(...streets.posts);
     lamps.push(...streets.lamps);
     unmirrored.push(...streets.decals);
+    for (const mesh of streets.seasonal) { mesh.visible = fine; seasonal.push(mesh); }
     if (streets.signals.length) signalHeads.push(streets.signals);
     signalStep = -1;
     zone.level = 2;
@@ -330,6 +360,9 @@ export async function createWorld(dir) {
   let conditions = null;
   function setConditions(now) {
     const { windows, lamps: lit, pools, wet, snow } = conditions = now;
+    if (now.haze) backdrop.tint(now.haze, now.far, lit);
+    fine = windows < 0.3 && wet < 0.15 && snow < 0.1 && !(now.far < 2800);        // a bright dry day (not an overcast one)
+    for (const mesh of seasonal) mesh.visible = fine;
     ENV.night.value = windows;
     ENV.snow.value = snow;
     ENV.wet.value = wet;

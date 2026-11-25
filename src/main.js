@@ -9,6 +9,8 @@ import { createWorld } from './world.js';
 import { EngineSound } from './audio.js';
 import { createAtmosphere, TIMES, WEATHERS } from './atmosphere.js';
 import { Windshield } from './windshield.js';
+import { Ambience } from './ambience.js';
+import { createSpray } from './spray.js';
 import { createRoadReflection } from './reflection.js';
 import { Radio } from './radio.js';
 import { ENV } from './map/shared.js';
@@ -27,7 +29,7 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 0.55;
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(60, 1, 0.2, 9000);
+const camera = new THREE.PerspectiveCamera(60, 1, 0.2, 13000);       // far enough for the hills and the bridge beyond the map
 
 const BASE = import.meta.env.BASE_URL;      // the game may be served from a sub-folder
 const world = await createWorld(`${BASE}map/haeundae/`);
@@ -405,6 +407,7 @@ function setState(next) {
     camYaw = car.heading;
     sound.start();
     radio.start(sound.ctx);
+    ambience.start(sound);
     document.activeElement?.blur();
   }
   keys.clear();
@@ -414,6 +417,7 @@ $('#start').addEventListener('click', () => setState('drive'));
 // ---------- sound panel, own music, credits ----------
 $('#vol-engine').addEventListener('input', e => { sound.volumes.engine = e.target.value / 100; });
 $('#vol-rain').addEventListener('input', e => { sound.volumes.rain = e.target.value / 100; });
+$('#vol-street').addEventListener('input', e => { ambience.volume = e.target.value / 100; });
 $('#vol-music').addEventListener('input', e => { radio.volume = e.target.value / 100; });
 $('#my-music').addEventListener('click', () => $('#my-files').click());
 $('#my-files').addEventListener('change', e => { radio.addFiles(e.target.files); e.target.value = ''; });
@@ -466,7 +470,10 @@ addEventListener('mousemove', e => {
   look.pitch -= e.movementY * 0.003;
 });
 addEventListener('blur', () => { keys.clear(); sound.horn(false); look.drag = false; });
-document.addEventListener('visibilitychange', () => { if (document.hidden) sound.horn(false); });
+// with the page out of sight nothing is updated, so the sound is stopped rather than left hanging on its last note
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { sound.horn(false); sound.ctx?.suspend(); } else if (state === 'drive') sound.ctx?.resume();
+});
 
 // ---------- loop ----------
 function resize() {
@@ -481,6 +488,81 @@ function resize() {
 addEventListener('resize', resize);
 setQuality('auto');
 setSky({ instant: true });
+
+// ---------- the sounds of the street, and what the weather does around the car ----------
+const ambience = new Ambience(), spray = createSpray(scene);
+const heard = { cars: [], sea: { gain: 0, pan: 0 }, crossing: null, wait: 0, storm: 8, wiping: true, stroke: 0 };
+// pan: which ear something at (x, z) is in, from the driver's seat. Right of the heading (hx, hz) is (-hz, hx).
+const panOf = (x, z) => {
+  const dx = x - car.x, dz = z - car.z, d = Math.hypot(dx, dz) || 1, hx = Math.sin(car.heading), hz = Math.cos(car.heading);
+  return (dx * -hz + dz * hx) / d;
+};
+function updateAmbience(dt, inside) {
+  const driving = state === 'drive';
+  // the traffic nearby, loudest first
+  heard.cars.length = 0;
+  for (const c of traffic.cars) {
+    const d = Math.hypot(c.x - car.x, c.z - car.z);
+    if (d > 55 || Math.abs((c.y ?? car.y) - car.y) > 4) continue;
+    heard.cars.push({ gain: (1 - d / 55) ** 2 * Math.min(1, 0.25 + c.v / 12), pan: panOf(c.x, c.z), speed: c.v });
+  }
+  heard.cars.sort((a, b) => b.gain - a.gain);
+  heard.wait -= dt;
+  if (heard.wait <= 0) {
+    heard.wait = 0.4;
+    // how near the sea is, and which way: rings of points round the car, the nearest one in the water
+    // (beyond the edge of the map there is no telling land from sea: those points do not count)
+    let near = Infinity, sx = 0, sz = 0;
+    const m = world.map;
+    for (const r of [30, 60, 100, 150, 220]) {
+      for (let k = 0; k < 12; k++) {
+        const ux = Math.sin(k * Math.PI / 6), uz = Math.cos(k * Math.PI / 6), x = car.x + ux * r, z = car.z + uz * r;
+        if (x < m.x0 || x > m.x1 || z < m.z0 || z > m.z1 || m.isLand(x, z)) continue;
+        near = r;
+        sx += ux;                   // the water lies the way most of the wet points do
+        sz += uz;
+      }
+      if (near < Infinity) break;
+    }
+    heard.sea = near < Infinity ? { gain: (1 - near / 260) ** 2 * (tunnel ? 0.2 : 1), pan: Math.hypot(sx, sz) > 0.01 ? panOf(car.x + sx, car.z + sz) : 0 } : { gain: 0, pan: 0 };
+    // the nearest crossing where people have the green
+    heard.crossing = null;
+    let best = 45;
+    for (const j of world.lanes.junctions) {
+      if (j.control !== 'signal' || Math.abs(j.x - car.x) > best || Math.abs(j.z - car.z) > best) continue;
+      const d = Math.hypot(j.x - car.x, j.z - car.z), walks = world.signalAt(j).arms.map(a => a.walk);
+      if (d >= best || !walks.some(w => w !== 'stop')) continue;
+      best = d;
+      heard.crossing = { gain: (1 - d / 45) ** 1.5, pan: panOf(j.x, j.z), hurry: !walks.includes('walk') };
+    }
+  }
+  const dry = atmosphere.rain < 0.1 && atmosphere.snowfall < 0.1, light = { day: 1, dawn: 0.8, sunset: 0.4, night: 0 }[atmosphere.time.id];
+  ambience.update(dt, {
+    active: driving, speed: Math.abs(car.vf), wet: atmosphere.wet, inside, cars: heard.cars, sea: heard.sea,
+    birds: dry && !tunnel ? light * (atmosphere.weather.id === 'fog' ? 0.4 : 1) : 0, crossing: tunnel ? null : heard.crossing,
+  });
+  // the wipers: one swish each way
+  if (inside && driving) {
+    if (heard.wiping && !glass.resting) ambience.wipe();
+    if (heard.stroke < 0.5 && glass.phase >= 0.5) ambience.wipe();
+  }
+  heard.wiping = glass.resting;
+  heard.stroke = glass.phase;
+  // a storm: now and then lightning, and the thunder after it
+  if (atmosphere.weather.id === 'rain' && atmosphere.rain > 0.8 && !tunnel) {
+    heard.storm -= dt;
+    if (heard.storm <= 0) {
+      heard.storm = 14 + Math.random() * 30;
+      const near = Math.random();
+      atmosphere.lightning();
+      if (driving) setTimeout(() => ambience.thunder(near), 300 + (1 - near) * 3500);
+    }
+  } else heard.storm = 6 + Math.random() * 10;
+  spray.update(dt, car, driving ? atmosphere.wet : 0, {
+    halfTrack: car.spec.W / 2 - 0.15, rear: car.spec.wheelbase / 2, tint: 0.25 + 0.75 * (1 - atmosphere.glow),
+    scale: renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2)),
+  });
+}
 
 const camVelocity = new THREE.Vector3(), camBefore = new THREE.Vector3();
 let last = performance.now();
@@ -524,6 +606,7 @@ renderer.setAnimationLoop(now => {
   }
   sound.update(car.rpm, car.throttle, Math.abs(car.vf), state === 'drive');
   sound.setRain(state === 'drive' ? atmosphere.rain : atmosphere.rain * 0.4, inside);
+  updateAmbience(dt, inside);
   radio.update(inside, tunnel ? 0.15 : 1, true);
   world.lightLamps(car.x, car.z, dt);
   if (quality.reflections && atmosphere.wet > 0.02) reflection.render(camera, car.y + 0.03, [...world.unmirrored, ...atmosphere.particles, car.vis.beam]);
@@ -536,7 +619,7 @@ window.__game = {
   crowd: null,                                // a number here overrides how many people are about, for measuring
   pose: null,                                 // { angle, dist, height, fov }: holds the menu camera still, for pictures of the car
   readyMs: Math.round(performance.now()),     // time from opening the page to being playable
-  world, scene, camera, renderer, setState, setQuality, get quality() { return `${qualityChoice}:${qualityLevel}`; }, selectCar, setSky, atmosphere, radio, sound,
+  world, scene, camera, renderer, setState, setQuality, get quality() { return `${qualityChoice}:${qualityLevel}`; }, selectCar, setSky, atmosphere, radio, sound, ambience, spray, heard,
   get car() { return car; },
   setView(next) { view = next; },
   traffic, trafficView, setTraffic, people, peopleView,

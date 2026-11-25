@@ -6,6 +6,7 @@ const rad = THREE.MathUtils.degToRad;
 // Bearing 0 is south (+Z), 90 east (+X), 270 west.
 const aim = (elevation, bearing) => new THREE.Vector3().setFromSphericalCoords(1, rad(90 - elevation), rad(bearing));
 const hex = c => new THREE.Color(c);
+const FLASH = new THREE.Color(0xdfe6ff);
 
 // sun: where the sun is drawn in the sky. light: where the main light comes from (the moon at night).
 // windows / lamps: how much of the city is lit up, 0..1.
@@ -222,7 +223,7 @@ export function createAtmosphere({ renderer, scene, camera, world }) {
   let timeIndex = 1, weatherIndex = 0;
   let goal = blend(TIMES[timeIndex], WEATHERS[weatherIndex]);
   const now = blend(TIMES[timeIndex], WEATHERS[weatherIndex]);
-  let clock = 0, moving = true, skyMoving = true, ground = { wet: 0, snow: 0 };
+  let clock = 0, moving = true, skyMoving = true, ground = { wet: 0, snow: 0 }, flash = 0, flashed = false;
 
   function apply() {
     U.sunPosition.value.copy(now.sun);
@@ -253,6 +254,7 @@ export function createAtmosphere({ renderer, scene, camera, world }) {
     snow.material.uniforms.uTint.value = 0.35 + 0.65 * now.rainTint;
     world.setConditions({
       windows: now.windows, lamps: THREE.MathUtils.smoothstep(now.lamps, 0.25, 0.6), pools: now.pools, wet: ground.wet, snow: ground.snow,
+      haze: now.haze, far: now.fogFar,
     });
   }
 
@@ -281,6 +283,8 @@ export function createAtmosphere({ renderer, scene, camera, world }) {
     get snowfall() { return now.snowfall; },
     get wet() { return ground.wet; },
     particles: [rain, snow],
+    // Lightning: the whole sky lights up for a moment, twice in quick succession.
+    lightning() { flash = 0.5; },
     // shadows: side of the shadow map in pixels, 0 for none. particles: share of the rain and snow drawn, 0..1.
     setQuality({ shadows, particles }) {
       sun.castShadow = shadows > 0;
@@ -327,6 +331,18 @@ export function createAtmosphere({ renderer, scene, camera, world }) {
           apply();
           moving = false;
         }
+      }
+      if (flash > 0) {
+        flash -= dt;
+        // two flickers: a bright one and a weaker echo
+        const k = Math.max(0, flash > 0.3 ? (flash - 0.3) / 0.2 : flash > 0.18 ? 0 : flash / 0.18 * 0.6);
+        hemi.intensity = now.ambient + k * 9;
+        domeMat.color.copy(now.overcast).lerp(FLASH, k * 0.8);
+        scene.fog.color.copy(now.haze).lerp(FLASH, k * 0.5);
+        flashed = true;
+      } else if (flashed) {
+        flashed = false;
+        apply();
       }
       U.time.value = clock * 40;
       dome.position.copy(camera.position);
