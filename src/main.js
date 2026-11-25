@@ -55,6 +55,7 @@ const trafficView = createTrafficView(world.trafficKit, scene, (x, z, c) => worl
 const people = createPeople(world.walks, { signalOf: world.signalAt });
 const peopleView = createPeopleView(scene, (x, z, p) => world.heightFor(p?.edge?.road)(x, z), `${BASE}people/`);
 let peopleFilled = false, brakeForPeople = 0;
+const stopping = { show: 0, horn: 0, quiet: 0 };       // the warning while the car stops itself for someone: seconds left of each
 const TRAFFIC = [['none', '없음', 0], ['light', '적음', 0.5], ['normal', '보통', 1]];
 let trafficLevel = 'normal', trafficFilled = false;
 const frustum = new THREE.Frustum(), viewMatrix = new THREE.Matrix4(), probe = new THREE.Sphere(new THREE.Vector3(), 7);
@@ -67,7 +68,10 @@ function updateTraffic(dt) {
   const out = ({ night: 0.35, dawn: 0.3 }[atmosphere.time.id] ?? 1) * ({ rain: 0.5, snow: 0.6, fog: 0.8 }[atmosphere.weather.id] ?? 1);
   const crowd = window.__game?.crowd ?? Math.round(quality.people * Math.min(1, level * 2) * out);
   frustum.setFromProjectionMatrix(viewMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
-  const player = { x: car.x, z: car.z, y: car.y, vx: car.vx, vz: car.vz };
+  const facing = car.reverse ? -1 : 1;
+  const player = { x: car.x, z: car.z, y: car.y, vx: car.vx, vz: car.vz, fx: Math.sin(car.heading) * facing, fz: Math.cos(car.heading) * facing,
+    ux: Math.sin(car.heading), uz: Math.cos(car.heading), len: car.spec.L, kind: { wid: car.spec.W },        // its body, for people to walk round... or wait for
+  };
   for (const c of traffic.cars) c.y = world.heightFor(roadUnder(c))(c.x, c.z);       // so that what is on a bridge and what is under it leave each other alone
   brakeForPeople = people.step(Math.min(dt, 0.1), {
     // to begin with the streets are filled wherever there is room, in view or not; after that people only turn up unseen
@@ -217,11 +221,25 @@ function update(dt, inp) {
   car.gx = (g(car.x + 1, car.z) - g(car.x - 1, car.z)) / 2;
   car.gz = (g(car.x, car.z + 1) - g(car.x, car.z - 1)) / 2;
   car.control(dt, inp);
-  // someone on foot right ahead: the car brakes by itself, whatever the driver is doing
-  if (!car.reverse && (brakeForPeople === 2 || brakeForPeople === 1 && Math.abs(car.vf) > 4)) { car.throttle = 0; car.brake = 1; }
-  sound.horn(!!inp.horn);
+  // Someone on foot right ahead: the car stops by itself, at once, whatever the driver is doing - and
+  // says so, on the screen and with the horn. Someone close beside the way: it slows to a crawl.
+  const speed = Math.hypot(car.vx, car.vz), halt = brakeForPeople === 2;
+  if (halt || (brakeForPeople === 1 && speed > 4)) { car.throttle = 0; car.brake = 1; }
+  if (halt && speed > 1.5 && stopping.quiet <= 0) { stopping.horn = 0.45; stopping.quiet = 3; }
+  if (halt && (speed > 0.3 || inp.up || inp.down)) stopping.show = 0.9;
+  for (const key of Object.keys(stopping)) stopping[key] = Math.max(0, stopping[key] - dt);
+  $('#alert').classList.toggle('is-hidden', stopping.show <= 0);
+  sound.horn(!!inp.horn || stopping.horn > 0);
   const n = Math.max(1, Math.ceil(dt * 240));
   for (let i = 0; i < n; i++) car.step(dt / n, atmosphere.grip);
+  if (halt) {
+    // harder than the brakes alone, on any road: the car is held, not merely slowed
+    const now = Math.hypot(car.vx, car.vz), keep = now > 0 ? Math.max(0, now - 14 * dt) / now : 0;
+    car.vx *= keep;
+    car.vz *= keep;
+    car.vf *= keep;
+    car.vl *= keep;
+  }
   car.collide(solids);
   car.y = world.surface(car.x, car.z, height);
   car.placed = true;
@@ -401,7 +419,7 @@ function setState(next) {
   state = next;
   $('#menu').classList.toggle('is-hidden', next !== 'menu');
   $('#hud').classList.toggle('is-hidden', next !== 'drive');
-  if (next !== 'drive') sound.horn(false);
+  if (next !== 'drive') { sound.horn(false); stopping.show = stopping.horn = stopping.quiet = 0; $('#alert').classList.add('is-hidden'); }
   look.drag = false;
   if (next === 'drive') {
     camYaw = car.heading;

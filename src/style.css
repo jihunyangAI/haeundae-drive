@@ -185,3 +185,13 @@ h1, h2, p { margin: 0; }
 
 /* in the driver's seat the car's own instruments take over */
 .hud.in-car .cluster, .hud.in-car #minimap, .hud.in-car .radio { display: none; }
+
+/* shown while the car is stopping itself for someone on foot */
+.alert {
+  position: absolute; left: 50%; top: 22%; transform: translateX(-50%);
+  padding: 10px 22px; border-radius: 10px; border: 2px solid #fff;
+  background: rgba(200, 30, 30, 0.92); color: #fff; font-weight: 800; font-size: 20px; letter-spacing: 0.02em;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); pointer-events: none; white-space: nowrap;
+  animation: alert-pulse 0.5s ease-in-out infinite alternate;
+}
+@keyframes alert-pulse { from { opacity: 1; } to { opacity: 0.72; } }

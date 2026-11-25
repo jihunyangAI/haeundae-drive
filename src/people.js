@@ -84,36 +84,22 @@ export function createPeople(walks, options = {}) {
   }
 
   // Is the body of a car a step ahead of this person (and not already all round them)?
-  function carAhead(p, cars) {
+  // The player's car counts as well, when it is given with its heading and size ({ ux, uz, len, kind: { wid } }).
+  function carAhead(p, cars, player) {
     const within = (c, x, z, grow) => {
       const dx = x - c.x, dz = z - c.z;
       return Math.abs(dx * c.ux + dz * c.uz) < c.len / 2 + grow && Math.abs(dx * c.uz - dz * c.ux) < c.kind.wid / 2 + grow;
     };
-    for (const c of cars) {
-      if (Math.abs(c.x - p.x) > 8 || Math.abs(c.z - p.z) > 8) continue;
-      if (within(c, p.x + p.ux * 0.9, p.z + p.uz * 0.9, 0.45) && !within(c, p.x, p.z, 0.2)) return true;
-    }
-    return false;
+    const inWay = c => Math.abs(c.x - p.x) < 8 && Math.abs(c.z - p.z) < 8 && within(c, p.x + p.ux * 0.9, p.z + p.uz * 0.9, 0.45) && !within(c, p.x, p.z, 0.2);
+    for (const c of cars) if (inWay(c)) return 1;
+    return player && player.len && inWay(player) ? 2 : 0;         // 2: it is the player's car
   }
 
   function walk(p, dt, cars, player) {
     const edge = p.edge;
     p.moving = false;
-    // getting out of the way of the player's car comes before everything else
-    if (player) {
-      const speed = Math.hypot(player.vx, player.vz);
-      if (speed > 0.8) {
-        const dx = p.x - player.x, dz = p.z - player.z, ux = player.vx / speed, uz = player.vz / speed;
-        const along = dx * ux + dz * uz, side = dx * uz - dz * ux;
-        if (along > -1.5 && along < 6 + speed * 1.5 && Math.abs(side) < 1.9) {
-          if (p.dodge <= 0) stats.dodged++;
-          p.dodge = 0.7;
-          p.away = side >= 0 ? 1 : -1;
-          p.awayX = uz * p.away;
-          p.awayZ = -ux * p.away;
-        }
-      }
-    }
+    // People do not jump out of the player's way: they walk on as they were, and it is the car that
+    // stops for them (see the brake worked out in step()).
     if (p.dodge > 0) {
       p.dodge -= dt;
       p.ox += p.awayX * 3.2 * dt;
@@ -138,9 +124,19 @@ export function createPeople(walks, options = {}) {
         if (to === edge) { p.dir = -p.dir; p.s = 0; p.next = null; } else enter(p, to, node);
         p.wait = 0;
         p.counted = false;
-      } else if (!carAhead(p, cars)) {                      // nobody walks into the side of a car
-        p.s = Math.min(edge.len, p.s + p.pace * (edge.kind === 'cross' ? 1.2 : 1) * dt);
-        p.moving = true;
+      } else {
+        const car = carAhead(p, cars, player);              // nobody walks into the side of a car
+        if (!car) {
+          p.blocked = 0;
+          p.s = Math.min(edge.len, p.s + p.pace * (edge.kind === 'cross' ? 1.2 : 1) * dt);
+          p.moving = true;
+        } else if (car === 2 && (p.blocked = (p.blocked || 0) + dt) > 4 && edge.kind !== 'cross') {
+          // the player's car has stood in the way long enough: back the way they came, so the two do not wait for each other for ever
+          p.dir = -p.dir;
+          p.s = edge.len - p.s;
+          p.next = null;
+          p.blocked = 0;
+        }
       }
     }
     if (p.stand) {
@@ -225,11 +221,17 @@ export function createPeople(walks, options = {}) {
         walk(p, dt, cars, player);
         p.umbrella = p.carries && wet > 0.25;               // up when it rains or snows
         if (player) {
-          const speed = Math.hypot(player.vx, player.vz);
-          if (speed > 1) {
-            const dx = p.x - player.x, dz = p.z - player.z, along = (dx * player.vx + dz * player.vz) / speed, side = Math.abs(dx * player.vz - dz * player.vx) / speed;
+          // the way the car is going - or, standing still, the way it would set off (player.fx, fz)
+          const speed = Math.hypot(player.vx, player.vz), moving = speed > 0.6;
+          const ux = moving ? player.vx / speed : player.fx, uz = moving ? player.vz / speed : player.fz;
+          if (ux !== undefined) {
+            const dx = p.x - player.x, dz = p.z - player.z, along = dx * ux + dz * uz, side = Math.abs(dx * uz - dz * ux);
             // right in the way: stop. Close beside the way: slow to a crawl while passing.
-            if (along > 0 && along < 4 + speed * speed / 12) brake = Math.max(brake, side < 1.35 ? 2 : side < 2.3 ? 1 : 0);
+            // A car standing still is only kept from setting off into someone at its bumper; and someone
+            // walking ahead the same way is followed at a few paces, not waited for.
+            const sameWay = p.moving && p.ux * ux + p.uz * uz > 0.5;
+            const reach = !moving || sameWay ? (player.len || 4) / 2 + (moving ? 2.6 : 1.1) : 4.5 + speed * speed / 14;
+            if (along > 0 && along < reach) brake = Math.max(brake, side < 1.35 ? 2 : side < 2.3 && moving ? 1 : 0);
           }
         }
       }
