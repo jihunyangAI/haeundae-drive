@@ -38,7 +38,7 @@ export class Vehicle {
 
   reset(x, z, heading) {
     Object.assign(this, {
-      x, z, y: 0, heading, vx: 0, vz: 0, vf: 0, vl: 0, yawRate: 0,
+      x, z, y: 0, placed: false, heading, vx: 0, vz: 0, vf: 0, vl: 0, yawRate: 0,
       steerIn: 0, steer: 0, throttle: 0, brake: 0, handbrake: false,
       reverse: false, gear: 0, shiftT: 0, sinceShift: 1, prevUp: 0, prevDown: 0,
       rpm: IDLE, rpmTarget: IDLE, ax: 0, ay: 0, roll: 0, pitch: 0,

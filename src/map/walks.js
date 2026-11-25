@@ -30,7 +30,7 @@ export function buildWalks(graph, map, { blocked, isLand }) {
 
   // ---- pavements: either side of each stretch of street, wherever the ground beside it is clear
   for (const link of graph.links) {
-    if (link.internal || !KERBED.test(link.road.k)) continue;
+    if (link.internal || !KERBED.test(link.road.k) || link.road.dk || (link.road.tn && link.road.len > 40)) continue;       // no pavement on a bridge or in an underpass
     link.walkEnds = [[null, null], [null, null]];          // [at the start, at the end] x [left, right] of the street's points
     const st = link.st, half = link.road.w / 2, n = Math.max(1, Math.round((link.s1 - link.s0) / 5));
     [-1, 1].forEach((side, k) => {
@@ -70,8 +70,8 @@ export function buildWalks(graph, map, { blocked, isLand }) {
         if (!blocked(pl[0], pl[1], link.road) && !blocked(pr[0], pr[1], link.road)) {
           const cl = node(...pl), cr = node(...pr);
           arm.zebra = join(cl, cr, 'cross', { arm });
-          if (left) join(left, cl, 'corner');
-          if (right) join(right, cr, 'corner');
+          if (left) join(left, cl, 'corner', { along: arm });
+          if (right) join(right, cr, 'corner', { along: arm });
           pair = [cl, cr];
         }
       }
@@ -90,7 +90,7 @@ export function buildWalks(graph, map, { blocked, isLand }) {
         if (d > 32 || used.has(p) || used.has(q) || !clear(p, q)) continue;
         used.add(p);
         used.add(q);
-        join(p, q, 'corner');
+        join(p, q, 'corner', { round: [a.arm, b.arm] });
       }
     }
   }

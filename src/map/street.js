@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { limitOf } from './network.js';
+import { limitOf, levelOf } from './network.js';
 import { ribbonMesh, paintMesh, LAYER } from './meshes.js';
 import { laneSplit } from './lanes.js';
 import { PLACES } from './stops.js';
@@ -37,6 +37,7 @@ export function createStreetKit(atlas) {
     trunk: [new THREE.CylinderGeometry(0.8, 1, 1, 6), new THREE.MeshStandardMaterial({ color: 0x4b3a2b, roughness: 0.9 })],
     crown: [new THREE.IcosahedronGeometry(1, 1), snowable(new THREE.MeshStandardMaterial({ roughness: 0.9, flatShading: true }), 0.6)],
   };
+  kinds.cover = [new THREE.CylinderGeometry(1, 1, 1, 14), new THREE.MeshStandardMaterial({ color: 0x2c2e31, roughness: 0.55, metalness: 0.6 })];      // manhole covers
   kinds.lamp = [new THREE.CircleGeometry(1, 16), signalLamp];
   kinds.arrowLamp = [new THREE.ShapeGeometry(arrow), signalLamp];
   kinds.barLamp = [new THREE.PlaneGeometry(1, 1), signalLamp];
@@ -90,8 +91,16 @@ function pointBack(pts, back) {
 // are the cars standing beside the access roads, { x, z, heading, kind, tint }; signals are
 // the lamps of the signal heads, { mesh, i, arm, role }, for the world to switch on and off.
 export function buildStreets(ctx, zone) {
-  const { map, ground, atlas, kit, nearRoad, stops } = ctx, { owns } = zone, rand = seeded(7 + zone.seed);
-  const white = [], yellow = [], sidewalks = [], posts = [], lamps = [];
+  const { map, atlas, kit, nearRoad, stops } = ctx, { owns } = zone, rand = seeded(7 + zone.seed);
+  const white = [], yellow = [], sidewalks = [], posts = [], lamps = [], grit = seeded(91 + zone.seed);
+  // Things lie on the uppermost surface, except those of a street that passes under a deck.
+  let low = false;
+  const ground = (x, z) => (low ? ctx.ground(x, z) : ctx.top(x, z)), strips = [white, yellow, sidewalks], done = [0, 0, 0];
+  // the strips laid since the last call belong to the street being worked on then
+  const turnTo = street => {
+    strips.forEach((list, i) => { for (let k = done[i]; k < list.length; k++) list[k].low = low; done[i] = list.length; });
+    low = !!street?.road.low;
+  };
   const signs = new QuadBatch(atlas);
   const inst = {};
   const dummy = new THREE.Object3D();
@@ -286,6 +295,7 @@ export function buildStreets(ctx, zone) {
   const ownsAt = f => owns(f.x, f.z);
 
   for (const st of zone.streets) {
+    turnTo(st);
     const r = st.road, ln = r.ln, half = r.w / 2, laneW = (r.w - 1) / ln, twoWay = !r.ow, centre = laneSplit(r)[1];
     const reverse = f => ({ x: f.x, z: f.z, ux: -f.ux, uz: -f.uz });
 
@@ -392,9 +402,16 @@ export function buildStreets(ctx, zone) {
     }
 
     // ---------- kerbs, lamps, trees ----------
-    if (!KERBED.test(r.k)) continue;
+    if (!KERBED.test(r.k) || levelOf(r) !== 0) continue;       // a bridge has its parapets and an underpass its walls
     for (const iv of st.intervals(c => c.half + SIDEWALK_W + 0.5)) {
       if (!touches(st, iv.s0, iv.s1, half + 20)) continue;
+      // drain grates by the kerb, and manhole covers in the lanes
+      for (let s = iv.s0 + 5 + grit() * 12; s < iv.s1 - 4; s += 20 + grit() * 16) {
+        const f = st.at(s), heading = Math.atan2(f.ux, f.uz), drain = beside(f, (grit() < 0.5 ? -1 : 1) * (half - 0.42));
+        if (owns(drain.x, drain.z)) put('box', drain.x, drain.y + LAYER.mark, drain.z, heading, 0.4, 0.02, 0.75);
+        const g = st.at(Math.min(iv.s1 - 2, s + 7 + grit() * 6)), cover = beside(g, (grit() - 0.5) * Math.max(0, r.w - 2.6));
+        if (grit() < 0.6 && owns(cover.x, cover.z)) put('cover', cover.x, cover.y + LAYER.mark, cover.z, 0, 0.36, 0.02, 0.36);
+      }
       // lay each side's kerb only along the runs that are clear of other carriageways
       for (const sd of [-1, 1]) {
         let from = null;
@@ -449,6 +466,37 @@ export function buildStreets(ctx, zone) {
         }
       }
     }
+  }
+
+  turnTo(null);
+
+  // ---------- pavement round the corners of junctions ----------
+  // The pavements stop short of a junction. Where people walk round the corner (see walks.js) the
+  // gap is paved: a curve from the end of one pavement to the end of the next, or straight on to a crossing.
+  const corners = [];
+  for (const e of ctx.walks.edges) {
+    if (e.kind !== 'corner' || !owns((e.a.x + e.b.x) / 2, (e.a.z + e.b.z) / 2)) continue;
+    const A = e.a, B = e.b, span = Math.hypot(B.x - A.x, B.z - A.z);
+    if (span < 0.5) continue;
+    const towards = arm => { const f = arm.link.st.at(arm.s), into = arm.end ? 1 : -1; return { x: f.x, z: f.z, ux: f.ux * into, uz: f.uz * into }; };
+    const p = [];
+    let centre;                                             // the carriageway side: the paving is shifted that way, up to the kerb
+    if (e.round) {
+      const da = towards(e.round[0]), db = towards(e.round[1]), cross = da.ux * db.uz - da.uz * db.ux;
+      const t = ((B.x - A.x) * db.uz - (B.z - A.z) * db.ux) / (cross || 1), u = ((B.x - A.x) * da.uz - (B.z - A.z) * da.ux) / (cross || 1);
+      const bent = Math.abs(cross) > 0.25 && t > 0 && t < 30 && u > 0 && u < 30;
+      const cx = bent ? A.x + da.ux * t : (A.x + B.x) / 2, cz = bent ? A.z + da.uz * t : (A.z + B.z) / 2;
+      for (let k = 0; k <= 8; k++) {
+        const s = k / 8;
+        p.push((1 - s) * (1 - s) * A.x + 2 * s * (1 - s) * cx + s * s * B.x, (1 - s) * (1 - s) * A.z + 2 * s * (1 - s) * cz + s * s * B.z);
+      }
+      centre = e.round[0].junction;
+    } else if (e.along) {
+      p.push(A.x, A.z, B.x, B.z);
+      centre = towards(e.along);
+    } else continue;
+    const side = Math.sign(-(B.z - A.z) * (centre.x - A.x) + (B.x - A.x) * (centre.z - A.z)) || 1;
+    corners.push({ p, w: SIDEWALK_W + 0.5, o: side * 1.1 });
   }
 
   // ---------- bus stops ----------
@@ -524,13 +572,14 @@ export function buildStreets(ctx, zone) {
 
   // ---------- meshes ----------
   const group = new THREE.Group();
-  const paintY = (x, z) => ground(x, z) + LAYER.mark;
+  const lie = (x, z, it) => (it.low ? ctx.ground(x, z) : ctx.top(x, z));
+  const paintY = (x, z, it) => lie(x, z, it) + LAYER.mark;
   // long lines are cut where the zone ends; short pieces (dashes, crossings) were already chosen whole
   const split = (items, color) => [
     ribbonMesh(items.filter(i => !i.whole), color, paintY, 5, { owns }), ribbonMesh(items.filter(i => i.whole), color, paintY, 5),
   ];
-  const walk = ribbonMesh(sidewalks, 0xb9b6ae, (x, z) => ground(x, z) + LAYER.sidewalk, 4, { snow: 0.85, owns });
-  group.add(walk, ...split(white, 0xe8e8e2), ...split(yellow, 0xe0b62e), paintMesh(arrowPos, arrowIdx, 0xe8e8e2, 5));
+  const walk = ribbonMesh(sidewalks, 0xb9b6ae, (x, z, it) => lie(x, z, it) + LAYER.sidewalk, 4, { snow: 0.85, owns });
+  group.add(walk, ribbonMesh(corners, 0xb9b6ae, (x, z) => ctx.top(x, z) + LAYER.sidewalk, 4, { snow: 0.85 }), ...split(white, 0xe8e8e2), ...split(yellow, 0xe0b62e), paintMesh(arrowPos, arrowIdx, 0xe8e8e2, 5));
 
   for (const [name, list] of Object.entries(inst)) {
     const [geo, mat] = kit.kinds[name], mesh = new THREE.InstancedMesh(geo, mat, list.length);

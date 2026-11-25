@@ -3,7 +3,8 @@ import { loadMap, pointInPolygon, boundsOf } from './map/data.js';
 import { buildTerrain, buildRoads, buildWalkways, buildWaterfront, tarmacMaterials, LAYER } from './map/meshes.js';
 import { createStreetKit, buildStreets } from './map/street.js';
 import { createFacadeKit, buildFacades } from './map/facades.js';
-import { analyseStreets, limitOf } from './map/network.js';
+import { buildStructures, solidsOf } from './map/decks.js';
+import { analyseStreets, limitOf, levelOf } from './map/network.js';
 import { buildLaneGraph, signalState, lampLit } from './map/lanes.js';
 import { LAMP_COLOURS } from './map/street.js';
 import { createTrafficKit } from './trafficview.js';
@@ -61,7 +62,7 @@ export async function createWorld(dir) {
     const t = Math.min(1, Math.max(0, ((x - s.ax) * s.dx + (z - s.az) * s.dz) / s.len2));
     return Math.hypot(x - s.ax - s.dx * t, z - s.az - s.dz * t);
   };
-  const drivable = r => r.c === 'drive' && !r.br;
+  const drivable = r => r.c === 'drive' && (!r.br || r.dk);
   // Is a road within `margin` metres of its own edge at (x, z)? kind: 'drive' for carriageways only.
   function nearRoad(x, z, margin, kind, except) {
     for (const s of segments.get(`${cellOf(x)},${cellOf(z)}`) || []) {
@@ -70,13 +71,16 @@ export async function createWorld(dir) {
     }
     return false;
   }
-  // Nearest drivable road within `reach` metres, or null.
-  function roadAt(x, z, reach = 14) {
+  // Nearest drivable road within `reach` metres, or null. y: the height of whoever asks, which tells
+  // the bridge from the road under it.
+  function roadAt(x, z, reach = 14, y) {
     let best = reach, found = null;
+    const level = y === undefined ? null : map.levelAt(x, z, y - LAYER.major), covered = level === 0 && !!map.deckAt(x, z);
     for (let i = cellOf(x - reach); i <= cellOf(x + reach); i++) {
       for (let j = cellOf(z - reach); j <= cellOf(z + reach); j++) {
         for (const s of segments.get(`${i},${j}`) || []) {
           if (!drivable(s.road)) continue;
+          if (level !== null && (level !== 0 || covered) && levelOf(s.road) !== level) continue;
           const d = distanceTo(s, x, z);
           if (d < best) { best = d; found = s.road; }
         }
@@ -149,13 +153,17 @@ export async function createWorld(dir) {
     }
   }
   let stamp = 0;
-  function addSolid(p) {
-    const [x0, z0, x1, z1] = boundsOf(p), solid = { p, x0, x1, z0, z1, seen: 0 };
+  // lo, hi: solid only for what is between these heights (a parapet up on a bridge, a wall down in an underpass)
+  function addSolid(p, lo = -Infinity, hi = Infinity) {
+    const [x0, z0, x1, z1] = boundsOf(p), solid = { p, x0, x1, z0, z1, lo, hi, seen: 0 };
     for (let i = cellOf(x0); i <= cellOf(x1); i++) for (let j = cellOf(z0); j <= cellOf(z1); j++) bucket(cells, i, j).push(solid);
   }
 
+  for (const s of solidsOf(map)) addSolid(s.p, s.lo, s.hi);
+
   // Calls hit(nx, nz, depth) for everything a circle overlaps; (nx, nz) points the way out.
-  function query(px, pz, r, hit) {
+  // py: the height of the thing asking; without it everything counts.
+  function query(px, pz, r, hit, py) {
     stamp++;
     for (let i = cellOf(px - r); i <= cellOf(px + r); i++) {
       for (let j = cellOf(pz - r); j <= cellOf(pz + r); j++) {
@@ -167,7 +175,7 @@ export async function createWorld(dir) {
             if (d < r + s.r && d > 1e-6) hit((px - s.x) / d, (pz - s.z) / d, r + s.r - d);
             continue;
           }
-          if (px < s.x0 - r || px > s.x1 + r || pz < s.z0 - r || pz > s.z1 + r) continue;
+          if (px < s.x0 - r || px > s.x1 + r || pz < s.z0 - r || pz > s.z1 + r || py < s.lo || py > s.hi) continue;
           let best = Infinity, qx = 0, qz = 0;
           const p = s.p;
           for (let a = 0, b = p.length - 2; a < p.length; b = a, a += 2) {
@@ -185,7 +193,7 @@ export async function createWorld(dir) {
       }
     }
     // the shore acts as a sea wall: push back up the slope
-    const h = ground(px, pz);
+    const h = map.top(px, pz);
     if (h < 0.2) {
       const gx = ground(px + 1, pz) - ground(px - 1, pz), gz = ground(px, pz + 1) - ground(px, pz - 1), g = Math.hypot(gx, gz);
       if (g > 1e-3) hit(gx / g, gz / g, Math.min(1, (0.2 - h) / (g / 2)));
@@ -197,15 +205,16 @@ export async function createWorld(dir) {
   }
 
   // ---------- building zones ----------
-  const ctx = { map, ground, atlas, kit: streetKit, nearRoad, stops };
+  const ctx = { map, ground, top: map.top, atlas, kit: streetKit, nearRoad, stops, walks };
   const api = { onZone: null, timings: { far: [], near: [] } };   // onZone(buildings): a zone's buildings became solid. timings: ms per build
 
   function buildFar(zone) {
     const began = performance.now();
-    const d = zone.data, roads = buildRoads(zone.roads, ground, zone.owns);
+    const d = zone.data, roads = buildRoads(zone.roads, map, zone.owns);
     Object.assign(zone, { areas: d.areas, lines: d.lines });
     group.add(
-      buildTerrain(zone, ground), roads, buildWalkways(zone.roads, ground, zone.owns), buildWaterfront(zone, ground),
+      buildTerrain(zone, ground), roads, buildWalkways(zone.roads, map, zone.owns), buildWaterfront(zone, ground),
+      buildStructures(map, zone, (x, z, road) => !nearRoad(x, z, 2, 'drive', road)),
       buildFacades(d.b.filter(b => b.h >= TALL), ground, facadeKit, zone.seed),
     );
     unmirrored.push(roads);
@@ -337,10 +346,10 @@ export async function createWorld(dir) {
     sea.material.roughness = 0.25 + 0.3 * wet;
   }
 
-  // surface the car's wheels rest on
-  const surface = (x, z) => ground(x, z) + LAYER.major;
+  // The surface the car's wheels rest on. y: how high the car is now, which decides between a deck and the ground under it.
+  const surface = (x, z, y) => map.surfaceAt(x, z, y === undefined ? Infinity : y - LAYER.major) + LAYER.major;
   return Object.assign(api, {
-    map, group, ground, surface, query, roadAt, spawnOn, posts, update: updateSignals, lanes, stops, trafficKit, atlas,
+    map, group, ground, top: map.top, heightFor: map.heightFor, levelAt: (x, z, y) => map.levelAt(x, z, y - LAYER.major), surface, query, roadAt, spawnOn, posts, update: updateSignals, lanes, stops, trafficKit, atlas,
     walks, signalAt: junction => signalState(junction, signalTime), setConditions, lightLamps, setLampLights,
     stream, prepare, loadAll: () => prepare(0, 0, Infinity),
     get pending() { return pending; },

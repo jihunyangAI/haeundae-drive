@@ -124,7 +124,7 @@ export function createPeopleView(scene, ground, dir) {
           f.time = 0;
         }
         const lift = p.edge.kind === 'cross' ? LAYER.mark : p.edge.kind === 'path' ? LAYER.path : LAYER.sidewalk;
-        f.root.position.set(p.x, ground(p.x, p.z) + lift, p.z);
+        f.root.position.set(p.x, ground(p.x, p.z, p) + lift, p.z);
         f.root.rotation.y = Math.atan2(p.ux, p.uz);
         f.brolly.visible = p.umbrella;
         // walking and standing blend into each other over a moment

@@ -4,13 +4,14 @@
 //   await __game.world.loadAll()
 //   (await import('/src/dev/laptest.js')).runLap(__game)                    loop round Marine City
 //   (await import('/src/dev/laptest.js')).runLap(__game, { trip: true })    Marine City to the far end of Dalmaji-gil
+//   ...runLap(__game, { through: [[x, z], [x, z]] })                         the shortest way between two places
 
 const CITY = [-495, -495, 495, 495];      // the original 1 km square, for the loop
 
 const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
 
-function buildRoute(world, trip) {
-  const m = world.map, box = trip ? [m.x0 + 20, m.z0 + 20, m.x1 - 20, m.z1 - 20] : CITY, nodes = new Map();
+function buildRoute(world, trip, through) {
+  const m = world.map, box = trip || through ? [m.x0 + 20, m.z0 + 20, m.x1 - 20, m.z1 - 20] : CITY, nodes = new Map();
   const inside = (x, z) => x > box[0] && x < box[2] && z > box[1] && z < box[3];
   const node = (x, z) => {
     const k = `${x.toFixed(1)},${z.toFixed(1)}`;
@@ -18,7 +19,7 @@ function buildRoute(world, trip) {
     return nodes.get(k);
   };
   for (const r of world.map.roads) {
-    if (r.c !== 'drive' || r.br || r.k === 'service' || r.k === 'busway') continue;
+    if (r.c !== 'drive' || (r.br && !r.dk) || r.k === 'service' || r.k === 'busway') continue;
     for (let i = 2; i < r.p.length; i += 2) {
       if (!inside(r.p[i - 2], r.p[i - 1]) || !inside(r.p[i], r.p[i + 1])) continue;
       const a = node(r.p[i - 2], r.p[i - 1]), b = node(r.p[i], r.p[i + 1]), d = Math.hypot(a.x - b.x, a.z - b.z);
@@ -60,7 +61,10 @@ function buildRoute(world, trip) {
   };
   const far = (score, from = main) => from.reduce((best, n) => (score(n) > score(best) ? n : best));
   const path = [];
-  if (trip) {
+  if (through) {
+    const [a, b] = through.map(([x, z]) => far(n => -Math.hypot(n.x - x, n.z - z)));
+    path.push(...shortest(a, b));
+  } else if (trip) {
     // from the start street in Marine City to the eastern end of Dalmaji-gil
     const start = far(n => -Math.hypot(n.x, n.z)), goal = far(n => n.x, main.filter(n => [...n.names].some(name => name.startsWith('달맞이길'))));
     path.push(...shortest(start, goal));
@@ -86,8 +90,8 @@ function buildRoute(world, trip) {
   return { total, at };
 }
 
-export function runLap(game, { trip = false, limitSeconds = 1500 } = {}) {
-  const { world } = game, { total, at } = buildRoute(world, trip);
+export function runLap(game, { trip = false, through = null, limitSeconds = 1500 } = {}) {
+  const { world } = game, { total, at } = buildRoute(world, trip, through);
   const streets = new Set();
   for (let s = 0; s < total; s += 20) {
     const name = world.roadAt(...at(s), 6)?.name;
@@ -101,7 +105,8 @@ export function runLap(game, { trip = false, limitSeconds = 1500 } = {}) {
     game.selectCar(index);
     const car = game.car, [x0, z0] = at(0), [x1, z1] = at(5);
     car.reset(x0, z0, Math.atan2(x1 - x0, z1 - z0));
-    const m = { prog: 0, maxOff: 0, offSum: 0, n: 0, maxKmh: 0, time: 0, impacts: 0, recoveries: 0, yMin: Infinity, yMax: -Infinity, hits: [] };
+    const m = { prog: 0, maxOff: 0, offSum: 0, n: 0, maxKmh: 0, time: 0, impacts: 0, recoveries: 0, yMin: Infinity, yMax: -Infinity, jolt: 0, levels: [], hits: [] };
+    let lastY = null;
     let done = false, stuck = 0, recover = 0;
     const collide = car.collide.bind(car);
     car.collide = w => {
@@ -126,6 +131,11 @@ export function runLap(game, { trip = false, limitSeconds = 1500 } = {}) {
         prog: best, maxOff: Math.max(m.maxOff, off), offSum: m.offSum + off, n: m.n + 1, time: t,
         maxKmh: Math.max(m.maxKmh, c.vf * 3.6), yMin: Math.min(m.yMin, c.y), yMax: Math.max(m.yMax, c.y),
       });
+      // the biggest step up or down between two moments, and the levels passed through (bridge 1, underpass -1)
+      if (lastY !== null && t > 1) m.jolt = Math.max(m.jolt, Math.abs(c.y - lastY));
+      lastY = c.y;
+      const level = world.levelAt(c.x, c.z, c.y);
+      if (m.levels.at(-1) !== level) m.levels.push(level);
       if (m.prog >= total - 3) done = true;
 
       // back up for a moment if the car has stopped against something
@@ -151,6 +161,7 @@ export function runLap(game, { trip = false, limitSeconds = 1500 } = {}) {
       finished: done, progressKm: +(m.prog / 1000).toFixed(2), seconds: Math.round(m.time),
       avgOffPathM: +(m.offSum / m.n).toFixed(1), maxOffPathM: +m.maxOff.toFixed(1), maxKmh: Math.round(m.maxKmh),
       impacts: m.impacts, recoveries: m.recoveries, hits: m.hits.slice(0, 6), heightRange: [+m.yMin.toFixed(1), +m.yMax.toFixed(1)],
+      biggestStepM: +m.jolt.toFixed(2), levels: m.levels,
       finite: [car.x, car.z, car.heading, car.vx].every(Number.isFinite),
     };
   }

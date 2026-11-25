@@ -46,9 +46,12 @@ $('#attribution').textContent = world.map.meta.attribution;
 
 // ---------- traffic ----------
 const traffic = createTraffic(world.lanes, { signalOf: world.signalAt });
-const trafficView = createTrafficView(world.trafficKit, scene, world.ground);
+// a car in the traffic is as high as the road it is on: up on the bridge, or down on the road under it
+// (crossing a junction it is on the road it comes from, or on the one it goes to if that is the one underneath)
+const roadUnder = c => c.path.road || (c.path.to.road.low ? c.path.to.road : c.path.from.road);
+const trafficView = createTrafficView(world.trafficKit, scene, (x, z, c) => world.heightFor(c ? roadUnder(c) : null)(x, z));
 const people = createPeople(world.walks, { signalOf: world.signalAt });
-const peopleView = createPeopleView(scene, world.ground, `${BASE}people/`);
+const peopleView = createPeopleView(scene, (x, z, p) => world.heightFor(p?.edge?.road)(x, z), `${BASE}people/`);
 let peopleFilled = false, brakeForPeople = 0;
 const TRAFFIC = [['none', '없음', 0], ['light', '적음', 0.5], ['normal', '보통', 1]];
 let trafficLevel = 'normal', trafficFilled = false;
@@ -62,7 +65,8 @@ function updateTraffic(dt) {
   const out = ({ night: 0.35, dawn: 0.3 }[atmosphere.time.id] ?? 1) * ({ rain: 0.5, snow: 0.6, fog: 0.8 }[atmosphere.weather.id] ?? 1);
   const crowd = window.__game?.crowd ?? Math.round(quality.people * Math.min(1, level * 2) * out);
   frustum.setFromProjectionMatrix(viewMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
-  const player = { x: car.x, z: car.z, vx: car.vx, vz: car.vz };
+  const player = { x: car.x, z: car.z, y: car.y, vx: car.vx, vz: car.vz };
+  for (const c of traffic.cars) c.y = world.heightFor(roadUnder(c))(c.x, c.z);       // so that what is on a bridge and what is under it leave each other alone
   brakeForPeople = people.step(Math.min(dt, 0.1), {
     // to begin with the streets are filled wherever there is room, in view or not; after that people only turn up unseen
     focus: car, want: crowd, cars: traffic.cars, player, hidden: peopleFilled ? outOfSight : () => true, near: peopleFilled ? 45 : 14, wet: Math.max(atmosphere.rain, atmosphere.snowfall), stops: world.stops,
@@ -77,7 +81,8 @@ function updateTraffic(dt) {
   trafficView.sync(traffic.cars, { lights: atmosphere.wantsLights, time: traffic.time });
 }
 // everything the player's car can run into: the fixed world and the other cars
-const solids = { query(x, z, r, cb) { world.query(x, z, r, cb); traffic.query(x, z, r, cb); people.query(x, z, r, cb); } };
+// what the player's car can run into, at the height it is at
+const solids = { query(x, z, r, cb) { world.query(x, z, r, cb, car.y); traffic.query(x, z, r, cb, car.y); people.query(x, z, r, cb); } };
 
 // ---------- car ----------
 const spawn = world.spawnOn(START_STREET);
@@ -205,7 +210,8 @@ const cycle = (list, current) => list[(list.indexOf(current) + 1) % list.length]
 
 // One simulation step: controls, physics at 240 Hz, collisions, ground following.
 function update(dt, inp) {
-  const g = world.ground;
+  const height = car.placed ? car.y : undefined;        // just put down: on the uppermost surface
+  const g = (x, z) => world.surface(x, z, height);
   car.gx = (g(car.x + 1, car.z) - g(car.x - 1, car.z)) / 2;
   car.gz = (g(car.x, car.z + 1) - g(car.x, car.z - 1)) / 2;
   car.control(dt, inp);
@@ -215,7 +221,8 @@ function update(dt, inp) {
   const n = Math.max(1, Math.ceil(dt * 240));
   for (let i = 0; i < n; i++) car.step(dt / n, atmosphere.grip);
   car.collide(solids);
-  car.y = world.surface(car.x, car.z);
+  car.y = world.surface(car.x, car.z, height);
+  car.placed = true;
 }
 
 const angleDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
@@ -347,8 +354,8 @@ function updateHud(dt) {
   roadTimer -= dt;
   if (roadTimer <= 0) {
     roadTimer = 0.3;
-    const road = world.roadAt(car.x, car.z);
-    tunnel = !!road?.road.tn;
+    const road = world.roadAt(car.x, car.z, 14, car.y);
+    tunnel = world.levelAt(car.x, car.z, car.y) < 0;
     hud.limit.textContent = road ? road.limit : '–';
     hud.road.textContent = road?.name || (road ? '이름 없는 길' : '도로 밖');
     hud.limit.dataset.over = road && kmh > road.limit + 5 ? '1' : '';
@@ -446,7 +453,7 @@ addEventListener('keydown', e => {
     radio.volume = Math.max(0, Math.min(1, radio.volume + (e.code === 'Equal' ? 0.1 : -0.1)));
     $('#vol-music').value = Math.round(radio.volume * 100);
   }
-  else if (e.code === 'KeyR') { car.reset(spawn.x, spawn.z, spawn.heading); camYaw = spawn.heading; }
+  else if (e.code === 'KeyR') { car.reset(spawn.x, spawn.z, spawn.heading); car.y = world.surface(spawn.x, spawn.z); camYaw = spawn.heading; }
   else if (e.code === 'Escape') setState('menu');
 });
 addEventListener('keyup', e => keys.delete(e.code));

@@ -37,6 +37,8 @@ for (const [name, x, z] of PLACES) {
             if (Math.hypot(ax - bx, az - bz) < 1.5) hit = true;
           }
           const key = `${p.id}-${q.id}`;
+          // one is on a bridge over the other (by the lanes' levels: there are no heights here, so a touch right at the end of a bridge is not seen)
+          if (hit && (p.path.level | 0) !== (q.path.level | 0)) continue;
           if (hit && !touching.has(key)) { overlaps++; if (overlaps <= 5) touches.push(`${name}: ${p.kind.id} on ${describe(p)} and ${q.kind.id} on ${describe(q)} touch at t=${Math.round(i * dt)}s`); }
           if (hit) touching.add(key); else touching.delete(key);
         }

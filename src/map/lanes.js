@@ -1,3 +1,5 @@
+import { levelOf } from './network.js';
+
 // Lane-level street network: every lane of every street, how lanes connect across each junction, who
 // has priority there, and the signal programme of the junctions that have lights. Traffic and
 // pedestrians read this; the road paint and signal heads are drawn from it. No rendering in here, so
@@ -187,7 +189,7 @@ export function buildLaneGraph(map, net) {
       for (let index = 0; index < counts[d]; index++) {
         const o = laneOffset(road, dir, index), pts = offsetLine(line, o);
         if (dir < 0) pts.reverse();
-        const lane = { id: lanes.length, link, road, dir, index, count: counts[d], o, pts, len: lengthOf(pts), out: [], into: [], from: null, to: null };
+        const lane = { id: lanes.length, link, road, level: levelOf(road), dir, index, count: counts[d], o, pts, len: lengthOf(pts), out: [], into: [], from: null, to: null };
         lanes.push(lane);
         link.lanes.push(lane);
       }

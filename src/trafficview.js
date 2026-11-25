@@ -177,7 +177,7 @@ ${shader.fragmentShader}`.replace(
 
 // Draws the cars of a traffic simulation: one mesh per car, taken from a pool. (Instancing was tried
 // first; rewriting the instance buffers every frame stalled the graphics card for several milliseconds.)
-// ground(x, z): height of the road.
+// ground(x, z, car): height of the road the car is on (without a car: of the uppermost surface).
 export function createTrafficView(kit, scene, ground) {
   const group = new THREE.Group(), pools = Object.fromEntries(Object.keys(kit.kinds).map(id => [id, []]));
   scene.add(group);
@@ -200,7 +200,7 @@ export function createTrafficView(kit, scene, ground) {
       for (const c of cars) {
         const i = used[c.kind.id] || 0, mesh = take(c.kind.id, i), u = mesh.material.userData.uniforms;
         used[c.kind.id] = i + 1;
-        const half = c.len * 0.35, front = ground(c.x + c.ux * half, c.z + c.uz * half), back = ground(c.x - c.ux * half, c.z - c.uz * half);
+        const half = c.len * 0.35, front = ground(c.x + c.ux * half, c.z + c.uz * half, c), back = ground(c.x - c.ux * half, c.z - c.uz * half, c);
         mesh.position.set(c.x, (front + back) / 2 + LAYER.major, c.z);
         mesh.rotation.set(-Math.atan2(front - back, 2 * half), Math.atan2(c.ux, c.uz), 0);
         mesh.visible = true;

@@ -83,6 +83,9 @@ export function createTraffic(graph, options = {}) {
   };
   // Taking and giving back leave to cross. A long vehicle also keeps others off the movements beside its own.
   const long = car => car.len > 7;
+  // Are two things on different levels - one on a bridge, the other on the road under it? By their heights
+  // where the game gives them (car.y), else by the level of the lanes they are on.
+  const apart = (a, b) => (a.y !== undefined && b.y !== undefined ? Math.abs(a.y - b.y) > 3 : (a.path?.level | 0) !== (b.path?.level | 0));
   const hold = (car, move) => { car.held.push(move); move.held++; };
   const release = (car, move) => {
     const at = car.held.indexOf(move);
@@ -199,10 +202,11 @@ export function createTraffic(graph, options = {}) {
     // not fooled by the lane beside it.
     let others = null;
     for (const c of cars) {
-      if (c !== car && c.path !== path && Math.abs(c.x - car.x) < 24 && Math.abs(c.z - car.z) < 24) (others ||= []).push(c);
+      // (a car on a bridge and one on the road under it have nothing to do with each other)
+      if (c !== car && c.path !== path && !apart(c, car) && Math.abs(c.x - car.x) < 24 && Math.abs(c.z - car.z) < 24) (others ||= []).push(c);
     }
     car.blocked = false;
-    const mind = player && Math.abs(player.x - car.x) < 40 && Math.abs(player.z - car.z) < 40 ? player : null;
+    const mind = player && !(Math.abs(player.y - car.y) > 3) && Math.abs(player.x - car.x) < 40 && Math.abs(player.z - car.z) < 40 ? player : null;
     let walkers = null;                                    // people close enough to be stepped in front of
     for (const p of people) if (Math.abs(p.x - car.x) < 22 && Math.abs(p.z - car.z) < 22) (walkers ||= []).push(p);
     if (others || mind || walkers) {
@@ -369,9 +373,10 @@ export function createTraffic(graph, options = {}) {
       }
     },
     // Circles of the cars near (x, z), for the player's car to collide with: cb(nx, nz, penetration).
-    query(x, z, r, cb) {
+    // y: the height of the asker; cars more than 3 m above or below it are not in its way
+    query(x, z, r, cb, y) {
       for (const car of cars) {
-        if (Math.abs(car.x - x) > 9 || Math.abs(car.z - z) > 9) continue;
+        if (Math.abs(car.x - x) > 9 || Math.abs(car.z - z) > 9 || Math.abs(car.y - y) > 3) continue;
         const span = car.len / 2 - car.kind.wid / 2, n = car.len > 7 ? 5 : 3;
         for (let i = 0; i < n; i++) {
           const off = span * (2 * i / (n - 1) - 1), cx = car.x + car.ux * off, cz = car.z + car.uz * off;

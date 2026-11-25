@@ -78,6 +78,8 @@ for (const e of osm) {
     const road = { k: t.highway, n: t.name || '', p: flat(pts), len: r2(length(pts)) };
     if (t.bridge && t.bridge !== 'no') road.br = Number(t.layer) || 1;
     if (t.tunnel && t.tunnel !== 'no') road.tn = 1;
+    // a bridge the game builds and lets you drive over; the elevated expressway at the edge of the map is only drawn
+    if (road.br && DRIVE[base] && !/^(trunk|motorway|service)$/.test(base)) road.dk = 1;
     if (DRIVE[base]) {
       const [perDir, laneW] = DRIVE[base];
       const oneway = t.oneway === 'yes' || t.junction === 'roundabout';
@@ -156,7 +158,7 @@ if (register) {
 if (register) {
   const CELL_M = 30, grid = new Map(), SIDE = /^(residential|living_street|unclassified)$/;
   for (const road of roads) {
-    if (road.c !== 'drive' || road.br || road.tn || road.k === 'service' || road.k === 'busway') continue;
+    if (road.c !== 'drive' || (road.br && !road.dk) || road.tn || road.k === 'service' || road.k === 'busway') continue;
     road.clear = Infinity;                                     // nearest building wall to the centre line, metres
     const pad = road.w / 2 + 2;
     for (let i = 2; i < road.p.length; i += 2) {

@@ -109,21 +109,23 @@ export const BRIDGE_LIFT = 7;   // placeholder height per bridge layer; real dec
 // The carriageway materials made so far, so the weather can wet them.
 export const tarmacMaterials = () => [...cache.entries()].filter(([key]) => key.endsWith(':true')).map(([, m]) => m);
 
-// roads: the roads that pass through or near the zone.
-export function buildRoads(roads, hAt, owns) {
+// roads: the roads that pass through or near the zone. A road lies on the uppermost surface (a bridge's
+// deck, the lid of an underpass) unless it is one that passes underneath.
+export function buildRoads(roads, map, owns) {
+  const hAt = map.ground, lie = (x, z, r) => map.heightFor(r)(x, z);
   const major = k => /^(motorway|trunk|primary|secondary)/.test(k);
-  const drive = roads.filter(r => r.c === 'drive' && !r.br);
+  const drive = roads.filter(r => r.c === 'drive' && (!r.br || r.dk));
   const group = new THREE.Group(), tarmac = { snow: 0.5, glossy: true, owns };
   group.add(
-    ribbonMesh(drive.filter(r => !major(r.k)), 0x4a4d53, (x, z) => hAt(x, z) + LAYER.minor, 2, tarmac),
-    ribbonMesh(drive.filter(r => major(r.k)), 0x34373c, (x, z) => hAt(x, z) + LAYER.major, 3, tarmac),
-    ribbonMesh(roads.filter(r => r.c === 'drive' && r.br), 0x7c7f84, (x, z, r) => Math.max(0, hAt(x, z)) + r.br * BRIDGE_LIFT, 1, { owns }),
+    ribbonMesh(drive.filter(r => !major(r.k)), 0x4a4d53, (x, z, r) => lie(x, z, r) + LAYER.minor, 2, tarmac),
+    ribbonMesh(drive.filter(r => major(r.k)), 0x34373c, (x, z, r) => lie(x, z, r) + LAYER.major, 3, tarmac),
+    ribbonMesh(roads.filter(r => r.c === 'drive' && r.br && !r.dk), 0x7c7f84, (x, z, r) => Math.max(0, hAt(x, z)) + r.br * BRIDGE_LIFT, 1, { owns }),
   );
   return group;
 }
 
-export function buildWalkways(roads, hAt, owns) {
-  return ribbonMesh(roads.filter(r => r.c === 'walk'), 0xd9c9a3, (x, z, r) => hAt(x, z) + LAYER.path + (r.br ? r.br * BRIDGE_LIFT : 0), 1, { snow: 0.85, owns });
+export function buildWalkways(roads, map, owns) {
+  return ribbonMesh(roads.filter(r => r.c === 'walk'), 0xd9c9a3, (x, z, r) => (r.lie ? r.lie(x, z) : map.top(x, z)) + LAYER.path, 1, { snow: 0.85, owns });
 }
 
 // Coastline, waterways and the marina piers.
