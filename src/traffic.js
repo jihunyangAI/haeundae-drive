@@ -236,6 +236,13 @@ export function createTraffic(graph, options = {}) {
           // turning, a car's tail cuts inside its line and a long vehicle's more so: it keeps further from what stands beside it
           const turning = onMove && path.turn !== 'S';
           const reach = (c.kind.wid + car.kind.wid) / 2 * 0.8 + (car.len > 7 && turning ? 0.7 : 0), span = c.len / 2 - c.kind.wid / 2;
+          // Two lanes running together (a ramp joining, a carriageway narrowing): of two cars side by side
+          // going the same way, the one in front goes and the one behind waits - not each for the other.
+          // (which is in front is judged along the way the two are going between them, so that they agree on it)
+          if (c.ux * car.ux + c.uz * car.uz > 0.6) {
+            const ahead = (c.x - car.x) * (car.ux + c.ux) + (c.z - car.z) * (car.uz + c.uz);
+            if (ahead < 0 || (ahead === 0 && c.id > car.id)) continue;
+          }
           for (const k of [-1, 0, 1]) {
             if (Math.hypot(c.x + c.ux * span * k - pose.x, c.z + c.uz * span * k - pose.z) < reach) {
               see(d - car.len / 2 - 0.9, Math.max(0, c.v * (c.ux * car.ux + c.uz * car.uz)), 'insight', c);

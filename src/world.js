@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { loadMap, pointInPolygon, boundsOf } from './map/data.js';
+import { loadMap, pointInPolygon, boundsOf, GROUND_CELL } from './map/data.js';
 import { buildTerrain, buildFarTerrain, buildRoads, buildWalkways, buildWaterfront, tarmacMaterials, LAYER } from './map/meshes.js';
 import { createStreetKit, buildStreets } from './map/street.js';
 import { createFacadeKit, buildFacades } from './map/facades.js';
@@ -239,16 +239,20 @@ export async function createWorld(dir) {
   const ctx = { map, ground, top: map.top, atlas, kit: streetKit, nearRoad, stops, walks };
   const api = { onZone: null, timings: { far: [], near: [] }, released: 0 };   // onZone(buildings): a zone's buildings became solid. timings: ms per build
 
+  // What a zone is built of never moves: its places are worked out once, not again every frame.
+  const settle = part => { part.updateMatrixWorld(true); part.traverse(o => { o.matrixAutoUpdate = false; }); };
   function buildFar(zone) {
     const began = performance.now();
     const d = zone.data, roads = buildRoads(zone.roads, map, zone.owns);
     Object.assign(zone, { areas: d.areas, lines: d.lines });
     zone.far = new THREE.Group();
+    zone.terrain = buildTerrain(zone, ground, GROUND_CELL * 4);
     zone.far.add(
-      buildTerrain(zone, ground), roads, buildWalkways(zone.roads, map, zone.owns), buildWaterfront(zone, ground),
+      zone.terrain, roads, buildWalkways(zone.roads, map, zone.owns), buildWaterfront(zone, ground),
       buildStructures(map, zone, (x, z, road) => !nearRoad(x, z, 2, 'ground', road)),         // (a pier may stand wherever no road runs on the ground)
       buildFacades(d.b.filter(b => b.h >= TALL), ground, facadeKit, zone.seed),
     );
+    settle(zone.far);
     group.add(zone.far);
     zone.mirrorless = [roads];
     unmirrored.push(roads);
@@ -263,8 +267,13 @@ export async function createWorld(dir) {
     const streets = buildStreets(ctx, zone);
     if (streets.parked.length) streets.group.add(trafficKit.parkedMesh(streets.parked, ground));
     zone.low = buildFacades(d.b.filter(b => b.h < TALL), ground, facadeKit, zone.seed + 1000);
+    // now that it is close, the ground in full detail takes the place of the coarse one
+    zone.far.remove(zone.terrain);
+    zone.terrain.geometry.dispose();
+    zone.terrain = buildTerrain(zone, ground);
     zone.near = new THREE.Group();
-    zone.near.add(streets.group, zone.low);
+    zone.near.add(streets.group, zone.low, zone.terrain);
+    settle(zone.near);
     group.add(zone.near);
     // What is solid, and where the lamps stand, is kept for good once a zone has been built: it is small,
     // and the same when the zone is built again after having been let go (see release()).
@@ -309,7 +318,7 @@ export async function createWorld(dir) {
     remove(unmirrored, zone.mirrorless);
     remove(seasonal, zone.seasonal);
     if (zone.signals) remove(signalHeads, [zone.signals]);
-    Object.assign(zone, { far: null, near: null, low: null, mirrorless: null, seasonal: null, signals: null, level: 0, data: null, fetching: null, areas: null, lines: null, outlines: null });
+    Object.assign(zone, { far: null, near: null, low: null, terrain: null, mirrorless: null, seasonal: null, signals: null, level: 0, data: null, fetching: null, areas: null, lines: null, outlines: null });
     api.released++;
   }
 

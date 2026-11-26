@@ -86,13 +86,21 @@ export function buildLaneGraph(map, net) {
     return nodes.get(key);
   };
   const links = [];
+  // Where the expressway goes from three lanes to two (or the other way) at the join of two stretches,
+  // the lanes need room to close in: both stretches stop short of the join, and the lines across it are long.
+  const endsAt = new Map(), TAPER = 16;
   for (const st of net.streets) {
-    const p = st.road.p, stops = [{ s: 0, node: nodeAt(p[0], p[1]), pad: 0, clear: 0 }];
+    const p = st.road.p;
+    for (const key of [`${p[0]},${p[1]}`, `${p.at(-2)},${p.at(-1)}`]) { if (!endsAt.has(key)) endsAt.set(key, []); endsAt.get(key).push(st); }
+  }
+  const taper = (st, x, z) => (st.road.dk && (endsAt.get(`${x},${z}`) || []).some(o => o !== st && o.road.dk && o.road.ln !== st.road.ln) ? TAPER : 0);
+  for (const st of net.streets) {
+    const p = st.road.p, stops = [{ s: 0, node: nodeAt(p[0], p[1]), pad: taper(st, p[0], p[1]), clear: 0 }];
     for (const c of [...st.cuts].sort((a, b) => a.s - b.s)) {
       const stop = { s: c.s, node: nodeAt(c.junction.x, c.junction.z), pad: c.half + clearOf(c.junction), clear: clearOf(c.junction) };
       if (c.s < 0.01) stops[0] = stop; else stops.push(stop);
     }
-    const last = { s: st.len, node: nodeAt(p.at(-2), p.at(-1)), pad: 0, clear: 0 };
+    const last = { s: st.len, node: nodeAt(p.at(-2), p.at(-1)), pad: taper(st, p.at(-2), p.at(-1)), clear: 0 };
     if (st.len - stops.at(-1).s > 0.01) stops.push(last);
     st.links = [];
     for (let i = 1; i < stops.length; i++) {
@@ -109,7 +117,9 @@ export function buildLaneGraph(map, net) {
   // where the two carriageways have come apart.
   const trim = l => { l.s0 = l.sa + l.pads[0]; l.s1 = l.sb - l.pads[1]; l.internal = l.s1 - l.s0 < MIN_STRETCH; };
   const outward = ({ link, end }) => {
-    const here = link.st.at(end ? link.sb : link.sa), on = link.st.at(end ? link.sb - 8 : link.sa + 8), dx = on.x - here.x, dz = on.z - here.z, len = Math.hypot(dx, dz) || 1;
+    // (the decks of the expressway part at a finer angle and over a longer way: their direction is taken further out)
+    const out = link.road.dk ? 40 : 8;
+    const here = link.st.at(end ? link.sb : link.sa), on = link.st.at(end ? link.sb - out : link.sa + out), dx = on.x - here.x, dz = on.z - here.z, len = Math.hypot(dx, dz) || 1;
     return [dx / len, dz / len];
   };
   for (const node of nodes.values()) {
@@ -127,7 +137,7 @@ export function buildLaneGraph(map, net) {
     node.ends.forEach((e, i) => {
       node.ends.forEach((o, k) => {
         const angle = Math.acos(Math.max(-1, Math.min(1, dirs[i][0] * dirs[k][0] + dirs[i][1] * dirs[k][1])));
-        if (k !== i && angle < 1.3) e.link.pads[e.end] = Math.max(e.link.pads[e.end], Math.min(45, (e.link.road.w + o.link.road.w) / 4 / Math.sin(Math.max(angle, 0.1) / 2) + 1));
+        if (k !== i && angle < 1.3) e.link.pads[e.end] = Math.max(e.link.pads[e.end], Math.min(e.link.road.dk ? 90 : 45, (e.link.road.w + o.link.road.w) / 4 / Math.sin(Math.max(angle, e.link.road.dk ? 0.05 : 0.1) / 2) + 1));
       });
     });
   }

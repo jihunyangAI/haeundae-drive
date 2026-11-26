@@ -12,14 +12,23 @@ const LAND = new THREE.Color(0xa9a69d), SHORE = new THREE.Color(0xcdc19c);
 const cache = new Map();
 const once = (key, make) => { if (!cache.has(key)) cache.set(key, make()); return cache.get(key); };
 
-export function buildTerrain(zone, hAt) {
-  const size = zone.x1 - zone.x0, seg = Math.round(size / GROUND_CELL);     // vertices sit on the ground grid
+// step: how far apart its points are. Close by they sit on the ground grid; a zone seen from far off is
+// built four times as coarse, which is sixteen times fewer triangles for a patch nobody sees closely.
+export function buildTerrain(zone, hAt, step = GROUND_CELL) {
+  const size = zone.x1 - zone.x0, seg = Math.round(size / step);
   const geo = new THREE.PlaneGeometry(size, size, seg, seg).rotateX(-Math.PI / 2).translate((zone.x0 + zone.x1) / 2, 0, (zone.z0 + zone.z1) / 2);
   const pos = geo.attributes.position, nor = geo.attributes.normal, colors = new Float32Array(pos.count * 3), c = new THREE.Color();
   const tinted = zone.areas.filter(a => AREA_COLOR[a.k]).map(a => ({ p: a.p, color: new THREE.Color(AREA_COLOR[a.k]) }));
   const n = new THREE.Vector3();
   for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i), z = pos.getZ(i), h = hAt(x, z);
+    const x = pos.getX(i), z = pos.getZ(i);
+    let h = hAt(x, z);
+    // A coarse sheet must not rise over the roads, which lie on the true ground: each of its points is put
+    // at the lowest ground anywhere round it, and a little under that.
+    if (step > GROUND_CELL) {
+      for (let dx = -step; dx <= step; dx += GROUND_CELL) for (let dz = -step; dz <= step; dz += GROUND_CELL) h = Math.min(h, hAt(x + dx, z + dz));
+      h -= 0.5;
+    }
     pos.setY(i, h);
     // slope straight from the height field, so the shading has no seam where two zones meet
     n.set(hAt(x - GROUND_CELL, z) - hAt(x + GROUND_CELL, z), 2 * GROUND_CELL, hAt(x, z - GROUND_CELL) - hAt(x, z + GROUND_CELL)).normalize();

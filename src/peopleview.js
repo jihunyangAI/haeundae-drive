@@ -91,8 +91,7 @@ export function createPeopleView(scene, ground, dir) {
     shade.position.y = 0.03;
     brolly.position.set(-0.16, 0, 0.08);
     root.add(model, shade, brolly);
-    group.add(root);
-    return { root, kind, uniforms: body.material.userData.uniforms, mixer, walk, idle, brolly, gait: 1, time: 0 };
+    return { root, kind, shown: false, uniforms: body.material.userData.uniforms, mixer, walk, idle, brolly, gait: 1, time: 0 };
   }
 
   const sphere = new THREE.Sphere(), frustum = new THREE.Frustum(), matrix = new THREE.Matrix4();
@@ -125,12 +124,18 @@ export function createPeopleView(scene, ground, dir) {
         }
         const lift = p.edge.kind === 'cross' ? LAYER.mark : p.edge.kind === 'path' ? LAYER.path : LAYER.sidewalk;
         f.root.position.set(p.x, ground(p.x, p.z, p) + lift, p.z);
+        // A figure is a skeleton of some forty bones, all of which the renderer goes through every frame
+        // whether it is in the picture or not. Those out of sight are taken off the scene meanwhile.
+        // (those close by stay, in sight or not: they are what the car's mirrors show)
+        const inView = frustum.intersectsSphere(sphere.set(f.root.position, 2.4)) || f.root.position.distanceToSquared(camera.position) < 40 * 40;
+        if (inView !== f.shown) { f.shown = inView; if (inView) group.add(f.root); else group.remove(f.root); }
+        if (!inView) continue;
         f.root.rotation.y = Math.atan2(p.ux, p.uz);
         f.brolly.visible = p.umbrella;
         // walking and standing blend into each other over a moment
         f.gait += ((p.moving ? 1 : 0) - f.gait) * Math.min(1, dt * 6);
         f.time += dt;
-        const seen = frustum.intersectsSphere(sphere.set(f.root.position, 2.4)), far = f.root.position.distanceTo(camera.position);
+        const seen = true, far = f.root.position.distanceTo(camera.position);
         // the walk cycle is advanced every frame up close, every third frame beyond 45 m, and not at all out of sight
         if (seen && (far < 45 || (frame + p.id) % 3 === 0)) {
           f.walk.setEffectiveWeight(f.gait);
@@ -142,7 +147,7 @@ export function createPeopleView(scene, ground, dir) {
       }
       for (const [id, f] of shown) {
         if (alive.has(id)) continue;
-        f.root.visible = false;
+        if (f.shown) { f.shown = false; group.remove(f.root); }
         pools[f.kind].push(f);
         shown.delete(id);
       }

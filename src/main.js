@@ -187,6 +187,12 @@ function setQuality(choice, level = choice === 'auto' ? guessQuality() : choice)
   qualityLevel = level;
   quality = QUALITY[level];
   renderer.setPixelRatio(Math.min(devicePixelRatio, quality.pixels));
+  // The glow at night is drawn through a picture of its own. Smoothing the edges of that one costs a built-in
+  // graphics chip a tenth of its frame rate, so only the highest quality does it.
+  for (const target of [composer.renderTarget1, composer.renderTarget2]) {
+    const samples = level === 'high' ? 4 : 0;
+    if (target.samples !== samples) { target.samples = samples; target.dispose(); }
+  }
   atmosphere.setQuality(quality);
   world.setLampLights(quality.lampLights);
   if (!quality.reflections) reflection.clear();
@@ -822,7 +828,7 @@ window.__game = {
   crowd: null,                                // a number here overrides how many people are about, for measuring
   pose: null,                                 // { angle, dist, height, fov }: holds the menu camera still, for pictures of the car
   readyMs: Math.round(performance.now()),     // time from opening the page to being playable
-  world, scene, camera, renderer, setState, setQuality, get quality() { return `${qualityChoice}:${qualityLevel}`; }, selectCar, setSky, atmosphere, radio, sound, ambience, spray, heard, guide, photo, save, get state() { return state; },
+  world, scene, camera, renderer, setState, setQuality, get quality() { return `${qualityChoice}:${qualityLevel}`; }, selectCar, setSky, atmosphere, radio, sound, ambience, spray, heard, guide, photo, save, composer, bloom, get state() { return state; },
   get car() { return car; },
   setView(next) { view = next; },
   traffic, trafficView, setTraffic, people, peopleView,
