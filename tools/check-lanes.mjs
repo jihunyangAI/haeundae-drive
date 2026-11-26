@@ -26,7 +26,8 @@ for (const lane of g.lanes) {
 let tight = 0;
 for (const m of g.moves) {
   // (the widest crossing on the map, where the eight-lane 동부산관광로 meets the coast road, has turns of about 115 m)
-  if (!(m.len < 125)) errors.push(`${where(m.junction)}: movement ${m.id} is ${Math.round(m.len)} m long`);
+  // (a movement through a knot of slip roads follows the slip roads, and can be as long as they are)
+  if (!(m.len < 180)) errors.push(`${where(m.junction)}: movement ${m.id} is ${Math.round(m.len)} m long`);
   for (let i = 2; i < m.pts.length; i++) {
     const a = m.pts[i - 2], b = m.pts[i - 1], c = m.pts[i];
     const turn = Math.abs(Math.atan2((b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]), (b[0] - a[0]) * (c[0] - b[0]) + (b[1] - a[1]) * (c[1] - b[1])));

@@ -214,7 +214,7 @@ export function buildLaneGraph(map, net) {
         if (link.internal && !link.short) continue;
         const towards = end === 1 ? 1 : -1;        // the lane direction that runs into this junction
         const arm = {
-          id: j.arms.length, junction: j, link, end, road: link.road, rank: rankOf(link.road),
+          id: j.arms.length, junction: j, node, link, end, road: link.road, rank: rankOf(link.road),
           entries: link.lanes.filter(l => l.dir === towards).sort((a, b) => a.index - b.index),
           exits: link.lanes.filter(l => l.dir === -towards).sort((a, b) => a.index - b.index),
           s: end === 1 ? link.s1 : link.s0, crossing: null, give: 'none', axis: 0,
@@ -244,9 +244,70 @@ export function buildLaneGraph(map, net) {
     }
     return out;
   };
+  // A junction made of several meeting points joined by short stretches (a knot of slip roads, a wide
+  // crossing) can be large, and a curve drawn straight from the lane in to the lane out may leave the
+  // carriageway altogether - across a verge, a traffic island, the shore. Where it strays far from the
+  // short stretches that actually join the two, the movement follows those instead.
+  const inside = new Map();          // junction -> [[node, node, centre line]] of the stretches inside it
+  for (const l of links) {
+    if (!l.internal || l.short) continue;
+    const j = byRoot.get(find(l.a));
+    if (!inside.has(j)) inside.set(j, []);
+    const flat = l.st.slice(l.sa, l.sb), line = [];
+    for (let i = 0; i < flat.length; i += 2) line.push([flat[i], flat[i + 1]]);
+    inside.get(j).push([l.a, l.b, line, l.road.ow]);
+  }
+  const off = (p, line) => {
+    let best = Infinity;
+    for (let i = 1; i < line.length; i++) {
+      const a = line[i - 1], b = line[i], dx = b[0] - a[0], dz = b[1] - a[1], l2 = dx * dx + dz * dz || 1, t = Math.min(1, Math.max(0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dz) / l2));
+      best = Math.min(best, Math.hypot(p[0] - a[0] - dx * t, p[1] - a[1] - dz * t));
+    }
+    return best;
+  };
+  const along = (j, arm, to, p0, p3) => {
+    const list = inside.get(j), goal = to.from.node;
+    if (!list || arm.node === goal) return null;
+    // the fewest stretches from the point the arm comes in at to the point the other leaves from (not against a one-way)
+    const prev = new Map([[arm.node, null]]), queue = [arm.node];
+    while (queue.length && !prev.has(goal)) {
+      const n = queue.shift();
+      for (const [a, b, line, oneway] of list) {
+        if (a === n && !prev.has(b)) { prev.set(b, [n, line]); queue.push(b); }
+        if (b === n && !oneway && !prev.has(a)) { prev.set(a, [n, [...line].reverse()]); queue.push(a); }
+      }
+    }
+    if (!prev.has(goal)) return null;
+    const mid = [];
+    for (let n = goal; prev.get(n); n = prev.get(n)[0]) mid.unshift(...prev.get(n)[1]);
+    // from the lane's end, by way of those stretches, to the next lane's start; the corners rounded
+    // (only the part of them between the two lanes: the lanes stop well short of the points the stretches run
+    // between, and going on to those points and back would put a hairpin at either end)
+    const nearest = q => mid.reduce((best, p, i) => (Math.hypot(p[0] - q[0], p[1] - q[1]) < Math.hypot(mid[best][0] - q[0], mid[best][1] - q[1]) ? i : best), 0);
+    if (!mid.length) return null;
+    const first = nearest(p0), last = nearest(p3);
+    if (last <= first) return null;
+    const between = mid.slice(first, last + 1);
+    let line = [p0, ...between.filter(p => Math.hypot(p[0] - p0[0], p[1] - p0[1]) > 4 && Math.hypot(p[0] - p3[0], p[1] - p3[1]) > 4), p3];
+    line = line.filter((p, i) => !i || Math.hypot(p[0] - line[i - 1][0], p[1] - line[i - 1][1]) > 0.5);
+    for (let pass = 0; pass < 2 && line.length > 2; pass++) {
+      const next = [line[0]];
+      for (let i = 1; i < line.length; i++) {
+        const a = line[i - 1], b = line[i];
+        next.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25], [a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75]);
+      }
+      next.push(line.at(-1));
+      line = next;
+    }
+    return line;
+  };
   const connect = (j, arm, from, to, turn) => {
     const p0 = from.pts.at(-1), p3 = to.pts[0], d0 = unit(from.pts.at(-2), p0), d3 = unit(p3, to.pts[1]);
-    const pts = curve(p0, d0, p3, d3, turn === 'S' ? 0.33 : turn === 'U' ? 0.7 : 0.42);
+    let pts = curve(p0, d0, p3, d3, turn === 'S' ? 0.33 : turn === 'U' ? 0.7 : 0.42);
+    if (j.nodes.length > 1 && turn !== 'U') {
+      const way = along(j, arm, to, p0, p3);
+      if (way && way.length > 2 && pts.some(p => off(p, way) > 3)) pts = way;
+    }
     const move = { id: moves.length, junction: j, arm, from, to, turn, pts, len: lengthOf(pts), conflicts: [], wide: [], opposed: false, yields: false, priority: 3 };
     moves.push(move);
     j.moves.push(move);

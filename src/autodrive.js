@@ -132,7 +132,7 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
 
   // ---------- state ----------
   const st = {
-    on: false, path: null, s: 0, plan: [], goal: null, planned: 0, hold: null, halted: false, arriving: false, from: [0, 0], waited: 0, last: null, lastS: 0, lost: false, heldStill: 0, signalled: false, keep: 0, turn: null, hook: 0, backs: 0, fails: 0, back: 0, idle: 0, forPeople: 0, noHold: null, noHoldFor: 0, wide: 0, off: 0, shift: 0, nudge: 0, aside: 0, blockIn: Infinity, blockOn: null, scan: 0, stuck: 0, pastFor: 0, tight: false,
+    on: false, path: null, s: 0, plan: [], goal: null, planned: 0, hold: null, halted: false, arriving: false, from: [0, 0], waited: 0, last: null, lastS: 0, lost: false, heldStill: 0, signalled: false, keep: 0, askew: 0, hookFor: 0, turn: null, hook: 0, backs: 0, fails: 0, back: 0, idle: 0, forPeople: 0, noHold: null, noHoldFor: 0, wide: 0, off: 0, shift: 0, nudge: 0, aside: 0, blockIn: Infinity, blockOn: null, scan: 0, stuck: 0, pastFor: 0, tight: false,
     // what it is doing and seeing, for the display: status text, the speed it is keeping (m/s), the path ahead,
     // the car it is following, the light ahead
     view: { status: '', reason: '', set: 0, ahead: [], lead: null, lamp: null, stopIn: Infinity, cars: [], people: [] },
@@ -235,7 +235,7 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
     if (!lane) { say('차로를 찾지 못해 자율주행을 켤 수 없습니다'); return false; }
     st.car = car;
     st.turn = null;
-    st.forPeople = st.noHoldFor = st.aside = st.back = st.idle = st.fails = st.backs = st.hook = 0;
+    st.forPeople = st.noHoldFor = st.aside = st.back = st.idle = st.fails = st.backs = st.hook = st.askew = st.hookFor = 0;
     Object.assign(st, { on: true, path: lane, s: project(lane, car.x, car.z).s, hold: null, halted: false, arriving: false, waited: 0, lost: false, shift: 0, nudge: 0, blockIn: Infinity, blockOn: null, scan: 0, stuck: 0 });
     replan(car);
     say(st.goal ? `자율주행 켜짐 · ${st.goal.name}까지` : '자율주행 켜짐 · 길을 따라 달립니다');
@@ -433,7 +433,11 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
         if (toLine < 3.2 && v < 0.3) st.halted = true;
       }
       if (go && (move.arm.walkers > 0 || move.to.from?.walkers > 0)) { go = false; reason = '보행자 대기'; }
-      if (go && move.conflicts.some(o => o.held > 0 || o.cars.length > 0)) { go = false; reason = '양보'; }
+      // Giving way, by the rules the traffic keeps: to whatever is on a path that crosses this one; and to
+      // one that has leave to cross and is on its way, only where it comes first - at lights, when this is
+      // a turn across the oncoming stream and that stream has green; elsewhere, when its road ranks no lower.
+      const before = o => (signalled ? move.yields && !o.yields && lampOf(o) === 'G' : o.priority >= move.priority);
+      if (go && move.conflicts.some(o => o.cars.length > 0 || o.held > 0 && before(o))) { go = false; reason = '양보'; }
       // room on the far side
       if (go && move.to.cars.some(c => c.s < spec.L + 3 && c.v < 1)) { go = false; reason = '앞이 막힘'; }
       if (go && toLine < v * v / (2 * COMFORT) + 10 && !(st.noHoldFor > 0 && st.noHold === move)) { release(); move.held++; st.hold = move; } else if (!go) stopAt(Math.max(0, toLine), reason);
@@ -580,10 +584,14 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
     // something solid right in front of the bonnet, off the line or not (the car has run wide): crawl
     {
       let close = false;
-      for (const reach of [front + 0.8, front + 2.5]) world.query(car.x + hs * reach, car.z + hc * reach, spec.W / 2, (nx, nz, pen) => { if (pen > 0.1) close = true; }, car.y);
+      for (const reach of [front + 0.8, front + 2.5, front + 2.5 + v * 0.7]) world.query(car.x + hs * reach, car.z + hc * reach, spec.W / 2, (nx, nz, pen) => { if (pen > 0.1) close = true; }, car.y);
       if (close && v > 1.2) acc = Math.min(acc, -3);
     }
     if (st.hook > 1.3 && v > 1.7) acc = Math.min(acc, -1.5);          // (and takes it at a walk)
+    // Pointing well away from the way it should be going, or still wide of the line after a tight corner:
+    // no speeding up until it is straight again (the next stretch may be a fast one, and the car is not on it yet).
+    st.hookFor = Math.max(0, st.hookFor - dt);
+    if ((st.askew > 0.45 || st.hookFor > 0 && st.off - Math.abs(st.aside) > 1.3) && v > 2.2) acc = Math.min(acc, -1);
     acc = Math.max(-7, Math.min(1.8, acc));
     const still = v < 0.25 && (stopIn < 2.5 || gap < 3);
     const out = { up: 0, down: 0, steer: 0, handbrake: false, horn: inp.horn };
@@ -623,10 +631,12 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
         before = turn;
       }
       st.hook = hook;
+      if (hook > 1.3) st.hookFor = 5;                             // (for a few seconds after, the car may still be wide of the line)
       const preview = spec.wheelbase / 2 + Math.max(0, (v - 4) * 0.3) + (hook > 1.3 ? 2.4 : 0);
       let k = 1;
       while (k < ahead.length - 1 && ahead[k][2] < preview) k++;
       const towards = Math.atan2(ahead[k][0] - ahead[k - 1][0], ahead[k][1] - ahead[k - 1][1]);
+      st.askew = Math.abs(wrap(towards - car.heading));
       const most = Math.max(0.12, Math.min(0.6, 2.5 / (v + 1)));
       const pull = Math.max(-most, Math.min(most, Math.atan(1.6 * side / (v + 2))));
       out.steer = Math.max(-1, Math.min(1, (wrap(towards - car.heading) - pull) / lock));
