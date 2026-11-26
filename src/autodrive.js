@@ -231,14 +231,14 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
 
   function engage(car) {
     const lane = laneAt(car.x, car.z, car.heading, world.levelAt(car.x, car.z, car.y));
-    if (car.reverse && Math.abs(car.vf) > 0.3) { say('후진 중에는 자동운전을 켤 수 없습니다'); return false; }
-    if (!lane) { say('차로를 찾지 못해 자동운전을 켤 수 없습니다'); return false; }
+    if (car.reverse && Math.abs(car.vf) > 0.3) { say('후진 중에는 자율주행을 켤 수 없습니다'); return false; }
+    if (!lane) { say('차로를 찾지 못해 자율주행을 켤 수 없습니다'); return false; }
     st.car = car;
     st.turn = null;
     st.forPeople = st.noHoldFor = st.aside = st.back = st.idle = st.fails = st.backs = st.hook = 0;
     Object.assign(st, { on: true, path: lane, s: project(lane, car.x, car.z).s, hold: null, halted: false, arriving: false, waited: 0, lost: false, shift: 0, nudge: 0, blockIn: Infinity, blockOn: null, scan: 0, stuck: 0 });
     replan(car);
-    say(st.goal ? `자동운전 켜짐 · ${st.goal.name}까지` : '자동운전 켜짐 · 길을 따라 달립니다');
+    say(st.goal ? `자율주행 켜짐 · ${st.goal.name}까지` : '자율주행 켜짐 · 길을 따라 달립니다');
     return true;
   }
   function disengage(why, car = st.car) {
@@ -286,7 +286,7 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
   function drive(dt, car, inp, grip = 1) {
     if (!st.on) return inp;
     // the driver takes over by steering or braking
-    if (Math.abs(inp.steer) > 0.25 || inp.down > 0.2 || inp.handbrake) { disengage('자동운전 꺼짐 · 직접 운전합니다'); return inp; }
+    if (Math.abs(inp.steer) > 0.25 || inp.down > 0.2 || inp.handbrake) { disengage('자율주행 꺼짐 · 직접 운전합니다'); return inp; }
     // turning round in a dead end: forward on full lock one way, back on full lock the other, until it faces out
     if (st.turn) {
       const tn = st.turn, a = tn.to.pts[0], b = tn.to.pts[1] || a, want = Math.atan2(b[0] - a[0], b[1] - a[1]), err = wrap(want - car.heading);
@@ -302,7 +302,7 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
       }
       if (tn.wait > 0) { tn.wait -= dt; return hold; }
       // still rolling from the last stroke (if it will not come to rest - a slope - the turn is given up)
-      if (Math.abs(car.vf) > 0.15 && tn.t === 0) { if ((tn.rolling = (tn.rolling || 0) + dt) > 4) { st.turn = null; disengage('돌릴 자리가 없어 자동운전을 끕니다 · 직접 운전해 주세요'); } return hold; }
+      if (Math.abs(car.vf) > 0.15 && tn.t === 0) { if ((tn.rolling = (tn.rolling || 0) + dt) > 4) { st.turn = null; disengage('돌릴 자리가 없어 자율주행을 끕니다 · 직접 운전해 주세요'); } return hold; }
       tn.rolling = 0;
       const forward = tn.phase % 2 === 0, reach = car.spec.L / 2 + 0.9;
       let solid = false;
@@ -315,7 +315,7 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
         tn.phase++;
         tn.t = 0;
         tn.wait = 0.5;
-        if (++tn.n > 14) { st.turn = null; disengage('돌릴 자리가 없어 자동운전을 끕니다 · 직접 운전해 주세요'); }
+        if (++tn.n > 14) { st.turn = null; disengage('돌릴 자리가 없어 자율주행을 끕니다 · 직접 운전해 주세요'); }
         return hold;
       }
       const push = Math.abs(car.vf) < 1.2 ? 0.4 : 0, lock = Math.sign(err || 1);
@@ -340,7 +340,7 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
     st.wide = Math.max(0, st.wide - dt);                       // turning round, the car swings wider than the line drawn for it
     if (at.d > (st.wide > 0 ? 18 : 9)) {                                            // well off it (a skid, a shove): find the lane again
       const lane = laneAt(car.x, car.z, car.heading, world.levelAt(car.x, car.z, car.y), 9);
-      if (!lane) { disengage('자동운전 꺼짐 · 차로를 벗어났습니다'); return inp; }
+      if (!lane) { disengage('자율주행 꺼짐 · 차로를 벗어났습니다'); return inp; }
       release();
       st.path = lane;
       at = project(lane, car.x, car.z);
@@ -453,7 +453,7 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
         // a dead end: the car turns round where it stands, to and fro, and goes back the way it came
         const back = !st.path.turn && (st.path.link.lanes.find(l => l.dir !== st.path.dir) || st.path.out.find(m => m.turn === 'U')?.to);
         if (back) { release(); st.turn = { to: back, phase: 0, t: 0, wait: 0, n: 0 }; say('막다른 길 · 돌려 나갑니다'); return { up: 0, down: 0, steer: 0, handbrake: true, horn: inp.horn }; }
-        disengage('길이 끝나 자동운전을 끕니다 · 직접 돌려 나가 주세요');
+        disengage('길이 끝나 자율주행을 끕니다 · 직접 돌려 나가 주세요');
         return { up: 0, down: 0, steer: 0, handbrake: true, horn: inp.horn };
       }
     }
@@ -484,7 +484,7 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
           // no other way: it is not given up at once - the car backs off and comes at it again (it may have
           // been standing askew, or over to one side for someone); the third time it hands back
           blocked.delete(st.blockOn);
-          if (++st.fails >= 3) { disengage('길이 막혀 자동운전을 끕니다 · 직접 운전해 주세요'); return inp; }
+          if (++st.fails >= 3) { disengage('길이 막혀 자율주행을 끕니다 · 직접 운전해 주세요'); return inp; }
           st.back = 7.2;
           st.shift = st.nudge = 0;
           return { up: 0, down: 0, steer: 0, handbrake: true, horn: inp.horn };
@@ -643,14 +643,14 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
       st.idle = 0;
       const behind = traffic.cars.some(c => { const dx = c.x - car.x, dz = c.z - car.z, f = dx * hs + dz * hc; return f < 0 && f > -spec.L / 2 - c.len / 2 - 4 && Math.abs(dx * hc - dz * hs) < 2; });
       // (a few times; if it still cannot get on, it says so and hands back)
-      if (++st.backs > 6) { disengage('움직일 수 없어 자동운전을 끕니다 · 직접 운전해 주세요'); return { up: 0, down: 0, steer: 0, handbrake: true, horn: inp.horn }; }
+      if (++st.backs > 6) { disengage('움직일 수 없어 자율주행을 끕니다 · 직접 운전해 주세요'); return { up: 0, down: 0, steer: 0, handbrake: true, horn: inp.horn }; }
       if (!behind) { release(); st.back = 7.2; st.stuck = 0; st.shift = st.nudge = 0; }
     }
     // indicators: before a turn and while changing lane
     if (changing && car.signal !== 'hazard') { const want = changing > 0 ? 'left' : 'right'; if (car.signal !== want) { car.setSignal(want); st.signalled = true; } }
 
     // arrived and stopped: hand back
-    if (st.arriving && v < 0.3) { disengage('도착 · 자동운전을 마칩니다'); return { up: 0, down: 0, steer: 0, handbrake: true }; }
+    if (st.arriving && v < 0.3) { disengage('도착 · 자율주행을 마칩니다'); return { up: 0, down: 0, steer: 0, handbrake: true }; }
 
     view.set = limit;
     view.stopIn = stopIn;
@@ -723,7 +723,7 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
   return {
     get on() { return st.on; },
     get state() { return st; },
-    toggle(car) { if (st.on) disengage('자동운전 꺼짐'); else engage(car); return st.on; },
+    toggle(car) { if (st.on) disengage('자율주행 꺼짐'); else engage(car); return st.on; },
     off: () => disengage(),
     // the guide says the place has been reached: pull up within a few car lengths and hand back
     reached(car) { if (st.on) { st.arriving = true; st.from = [car.x, car.z]; } },
