@@ -13,7 +13,7 @@
 
   <div id="menu" class="menu">
     <header class="brand">
-      <span class="kicker">PROTOTYPE 0.22</span>
+      <span class="kicker">PROTOTYPE 0.23</span>
       <h1>시티 드라이브</h1>
       <p>부산 해운대 마린시티에서 달맞이길까지. 차를 고르고 시내로 나가세요.</p>
     </header>
@@ -94,11 +94,12 @@
       <div class="speed"><span id="speed">0</span><small>km/h</small></div>
       <div class="rpm"><i id="rpm"></i></div>
     </div>
+    <div id="auto" class="auto is-hidden"><b>자동운전</b><canvas id="auto-view" width="220" height="260"></canvas><small>조향·브레이크를 쓰면 꺼집니다 · <b>G</b></small></div>
     <div class="radio">
       <span id="radio-station"></span>
       <span id="radio-track"></span>
     </div>
-    <div class="help"><b>W/S</b> 가속·브레이크 <b>A/D</b> 조향 <b>C</b> 시점 <b>N</b> 목적지 <b>P</b> 사진 <b>Esc</b> 메뉴 <b>?</b> 조작법 전체</div>
+    <div class="help"><b>W/S</b> 가속·브레이크 <b>A/D</b> 조향 <b>C</b> 시점 <b>N</b> 목적지 <b>G</b> 자동운전 <b>P</b> 사진 <b>Esc</b> 메뉴 <b>?</b> 조작법 전체</div>
   </div>
 
   <div id="toast" class="toast is-hidden"></div>
@@ -122,6 +123,7 @@
         <tr><th>U</th><td>운전석에서도 화면 정보 보기</td></tr>
         <tr><th>T / Y</th><td>시간 · 날씨 바꾸기</td></tr>
         <tr><th>N</th><td>다음 목적지 (길 안내)</td></tr>
+        <tr><th>G</th><td>자동운전 켜기 · 끄기 (목적지가 있으면 거기까지, 없으면 길을 따라)</td></tr>
         <tr><th>P</th><td>사진 모드</td></tr>
         <tr><th>, / .</th><td>라디오 채널</td></tr>
         <tr><th>- / =</th><td>음악 음량</td></tr>

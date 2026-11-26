@@ -12,6 +12,7 @@ import { Windshield } from './windshield.js';
 import { Ambience } from './ambience.js';
 import { createSpray } from './spray.js';
 import { createGuide } from './guide.js';
+import { createAutodrive } from './autodrive.js';
 import { createRoadReflection } from './reflection.js';
 import { Radio } from './radio.js';
 import { ENV } from './map/shared.js';
@@ -96,6 +97,7 @@ const solids = { query(x, z, r, cb) { world.query(x, z, r, cb, car.y); traffic.q
 const SAVE_KEY = 'haeundae-drive:1';
 const saved = (() => { try { return JSON.parse(localStorage.getItem(SAVE_KEY)) || {}; } catch { return {}; } })();
 const guide = createGuide(world.map);
+const autodrive = createAutodrive({ world, traffic, people, guide, say: text => toast(text), arrived: place => { toast(`${place.name} 도착`); renderPlaces(); save(); } });
 let spawn = world.spawnOn(START_STREET);        // where R puts the car back
 // (what is read back is checked: a damaged entry must not stop the game from starting)
 const indexIn = (v, list, otherwise) => (Number.isInteger(v) && v >= 0 && v < list.length ? v : otherwise);
@@ -142,6 +144,7 @@ function readInput() {
     if (pressed(4)) car.setSignal('left');           // shoulder buttons: turn signals; Y: hazard lights
     if (pressed(5)) car.setSignal('right');
     if (pressed(3)) car.setSignal('hazard');
+    if (pressed(2)) autodrive.toggle(car);           // X: the car drives itself
     inp.horn = !!down[10];                           // press the left stick
     padBefore = down;
     look.stickX = pad.mapping === 'standard' ? pad.axes[2] || 0 : 0;      // right stick: look around
@@ -245,6 +248,7 @@ function update(dt, inp) {
   const g = (x, z) => world.surface(x, z, height);
   car.gx = (g(car.x + 1, car.z) - g(car.x - 1, car.z)) / 2;
   car.gz = (g(car.x, car.z + 1) - g(car.x, car.z - 1)) / 2;
+  if (autodrive.on) inp = autodrive.drive(dt, car, inp, atmosphere.grip);
   car.control(dt, inp);
   // Someone on foot right ahead: the car stops by itself, at once, whatever the driver is doing - and
   // says so, on the screen and with the horn. Someone close beside the way: it slows to a crawl.
@@ -437,9 +441,11 @@ function updateHud(dt) {
   }
   // the way to the place chosen
   const reached = guide.update(dt, car);
-  if (reached) { toast(`${reached.name} 도착`); renderPlaces(); save(); }
+  if (reached) { autodrive.reached(car); toast(`${reached.name} 도착`); renderPlaces(); save(); }
   $('#guide-chip').classList.toggle('is-hidden', !guide.goal);
   if (guide.goal) $('#guide-chip').textContent = `→ ${guide.goal.name} ${guide.left >= 950 ? `${(guide.left / 1000).toFixed(1)}km` : `${Math.round(guide.left / 10) * 10}m`}`;
+  $('#auto').classList.toggle('is-hidden', !autodrive.on);
+  if (autodrive.on) autodrive.draw($('#auto-view'), car);
   drawMinimap();
 }
 
@@ -532,7 +538,7 @@ function setState(next) {
   $('#photo').classList.toggle('is-hidden', next !== 'photo');
   if (next === 'photo') Object.assign(photo, { yaw: car.heading + Math.PI * 0.8, pitch: 0.18, dist: 8, shoot: false });
   if (next === 'menu') renderPlaces();
-  if (next !== 'drive') { sound.horn(false); stopping.show = stopping.horn = stopping.quiet = 0; $('#alert').classList.add('is-hidden'); }
+  if (next !== 'drive') { autodrive.off(); sound.horn(false); stopping.show = stopping.horn = stopping.quiet = 0; $('#alert').classList.add('is-hidden'); }
   look.drag = false;
   if (next === 'drive') {
     camYaw = car.heading;
@@ -608,11 +614,13 @@ addEventListener('keydown', e => {
     returning = true;
     world.prepare(spawn.x, spawn.z).finally(() => {
       returning = false;
+      autodrive.off();
       car.reset(spawn.x, spawn.z, spawn.heading);
       car.y = world.surface(spawn.x, spawn.z);
       camYaw = spawn.heading;
     });
   }
+  else if (e.code === 'KeyG') autodrive.toggle(car);
   else if (e.code === 'KeyP') setState('photo');
   else if (e.code === 'KeyN') {
     // the next place in the list, then none
@@ -824,7 +832,9 @@ renderer.setAnimationLoop(now => {
 });
 
 // Handle for automated checks: runs the simulation without rendering. input(t) returns the controls at time t.
+let simClock = 0;
 window.__game = {
+  autodrive,
   crowd: null,                                // a number here overrides how many people are about, for measuring
   pose: null,                                 // { angle, dist, height, fov }: holds the menu camera still, for pictures of the car
   readyMs: Math.round(performance.now()),     // time from opening the page to being playable
@@ -832,6 +842,12 @@ window.__game = {
   get car() { return car; },
   setView(next) { view = next; },
   traffic, trafficView, setTraffic, people, peopleView,
+  // the same with the traffic and the people moving too (for trying the car driving itself); each(t, car) may stop it by returning true
+  simulateAll(seconds, each = () => false, dt = 1 / 60) {
+    const idle = { up: 0, down: 0, steer: 0, handbrake: false };
+    for (let t = 0; t < seconds; t += dt) { world.update(simClock += dt); updateTraffic(dt); update(dt, idle); if (guide.update(dt, car)) autodrive.reached(car); if (each(t, car)) return t; }
+    return seconds;
+  },
   simulate(seconds, input, dt = 1 / 60) {
     brakeForPeople = 0;               // people are not stepped here, so there is nobody to brake for
     for (let t = 0; t < seconds; t += dt) update(dt, input(t, car));

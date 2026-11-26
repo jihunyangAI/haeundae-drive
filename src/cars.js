@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { buildShell } from './carbody.js';
 import { buildInterior } from './interior.js';
+import { addDetails } from './cardetail.js';
 import { ENV } from './map/shared.js';
 
 // Dimensions in metres, mass in kg. All four are made-up cars.
@@ -54,7 +55,7 @@ export const CARS = [
       belt: [[-2.35, 0.97], [-1.62, 1.01], [1.0, 0.95], [2.09, 0.77], [2.35, 0.77]],
       tumble: 0.32, nose: { d: 0.26, nx: 2.6, ny: 3.2 }, tail: { d: 0.2, nx: 3.2, ny: 3.6 },
       glass: { front: [0.3, 0.98], rear: [-1.6, -0.97], side: [-1.38, 0.9] }, pillars: [-0.35], doors: [0.88, -0.35, -0.95],
-      front: {}, rear: {},
+      sunroof: [-0.62, 0.08], front: {}, rear: {},
     },
     cabin: { upper: 0x2c2f34, lower: 0x4a4238, seat: 0x6e5f4c, accent: 0xb89b6a, dial: '#ffffff', top: 240 },
     wheel: { width: 0.22, spokes: 10, thick: 0.04, rim: 0xb9bec4 }, exhaust: [-0.55, 0.55], plateText: '153가 2046',
@@ -69,7 +70,7 @@ export const CARS = [
       top: [[-2.225, 0.88], [-2.025, 0.9], [-1.75, 0.93], [-0.9, 1.23], [-0.35, 1.27], [0.05, 1.245], [0.72, 0.9], [1.3, 0.82], [1.925, 0.64], [2.225, 0.62]],
       belt: [[-2.225, 0.88], [-1.2, 0.9], [0.72, 0.86], [1.925, 0.6], [2.225, 0.6]],
       tumble: 0.42, nose: { d: 0.3, nx: 2.4, ny: 2.8 }, tail: { d: 0.2, nx: 3.2, ny: 3.4 },
-      glass: { front: [0.07, 0.7], rear: [-1.72, -0.92], side: [-1.1, 0.62] }, pillars: [], doors: [0.6, -0.55],
+      glass: { front: [0.07, 0.7], rear: [-1.72, -0.92], side: [-1.1, 0.62] }, pillars: [], doors: [0.6, -0.55], sunroof: [-0.72, -0.12],
       front: {
         head: { x: [0.52, 0.97], y: [0.68, 0.78], yOut: [0.74, 0.9] }, drl: { x: [0.52, 0.95], y: [0.62, 0.65], yOut: [0.68, 0.71] },
         blink: { x: [0.78, 0.95], y: [0.42, 0.48], yOut: [0.46, 0.52] }, grille: null, intake: { x: [0, 0.7], y: [0.08, 0.36] }, plate: 0.22,
@@ -90,7 +91,7 @@ export const CARS = [
       belt: [[-2.375, 1.18], [-1, 1.19], [1.05, 1.15], [2.135, 0.94], [2.375, 0.94]],
       tumble: 0.26, nose: { d: 0.24, nx: 3.2, ny: 3.8 }, tail: { d: 0.16, nx: 3.6, ny: 4.5 },
       glass: { front: [0.4, 1.03], rear: [-2.12, -1.92], side: [-2.0, 0.95] }, pillars: [-0.3, -1.25], doors: [0.92, -0.3, -0.935],
-      cladding: true, rails: [-1.75, 0.2],
+      cladding: true, rails: [-1.75, 0.2], sunroof: [-1.05, 0.18],
       front: {
         grille: { x: [0, 0.46], y: [0.52, 0.82] }, head: { x: [0.54, 0.97], y: [0.66, 0.8], yOut: [0.68, 0.86] },
         drl: { x: [0.54, 0.95], y: [0.59, 0.63], yOut: [0.61, 0.65] }, intake: { x: [0, 0.6], y: [0.14, 0.3] }, plate: 0.42,
@@ -152,14 +153,37 @@ function wheelGeometry(R, w) {
   const lathe = pts => new THREE.LatheGeometry(pts.map(([r, x]) => new THREE.Vector2(r, x)), 28).rotateZ(-Math.PI / 2);
   const tyre = lathe([[rr, -hw], [R - 0.04, -hw], [R - 0.008, -hw + 0.022], [R, -hw + 0.05], [R, hw - 0.05], [R - 0.008, hw - 0.022], [R - 0.04, hw], [rr, hw]]);
   const parts = [lathe([[rr - 0.02, -hw + 0.02], [rr, -hw + 0.02], [rr, hw - 0.012], [rr - 0.022, hw - 0.012], [rr - 0.03, hw - 0.035]])];
-  const spoke = new THREE.BoxGeometry(0.03, rr - 0.05, w.thick).translate(hw - 0.045, (rr + 0.01) / 2, 0);
+  // Each spoke narrows towards the rim and leans in towards the hub, so the wheel is dished rather than flat.
+  const spoke = new THREE.BoxGeometry(0.03, rr - 0.05, w.thick, 1, 4, 1).translate(0, (rr + 0.01) / 2, 0);
+  {
+    const p = spoke.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      const t = Math.min(1, Math.max(0, p.getY(i) / rr));           // 0 at the hub, 1 at the rim
+      p.setZ(i, p.getZ(i) * (1.25 - 0.6 * t));
+      p.setX(i, p.getX(i) + hw - 0.045 - 0.03 * (1 - t) ** 2);
+    }
+    spoke.computeVertexNormals();
+  }
   for (let i = 0; i < w.spokes; i++) {
     const a = i / w.spokes * Math.PI * 2;
     for (const off of w.twin ? [-0.13, 0.13] : [0]) parts.push(spoke.clone().rotateX(a + off));
   }
-  parts.push(new THREE.CylinderGeometry(0.075, 0.085, 0.05, 16).rotateZ(Math.PI / 2).translate(hw - 0.04, 0, 0));
-  const disc = new THREE.CylinderGeometry(rr * 0.8, rr * 0.8, 0.025, 24).rotateZ(Math.PI / 2).translate(hw - 0.1, 0, 0);
-  return { tyre, rim: mergeGeometries(parts.map(g => g.toNonIndexed())), disc };
+  // the lip of the rim, the hub, and the nuts round it
+  parts.push(new THREE.TorusGeometry(rr - 0.012, 0.011, 8, 32).rotateY(Math.PI / 2).translate(hw - 0.014, 0, 0));
+  parts.push(new THREE.CylinderGeometry(0.075, 0.09, 0.05, 16).rotateZ(Math.PI / 2).translate(hw - 0.07, 0, 0));
+  const cap = [new THREE.CylinderGeometry(0.034, 0.038, 0.018, 16).rotateZ(Math.PI / 2).translate(hw - 0.04, 0, 0)];
+  for (let i = 0; i < 5; i++) {
+    const a = (i + 0.5) / 5 * Math.PI * 2;
+    cap.push(new THREE.CylinderGeometry(0.0095, 0.0095, 0.02, 6).rotateZ(Math.PI / 2).translate(hw - 0.045, Math.cos(a) * 0.058, Math.sin(a) * 0.058));
+  }
+  // the brake: a disc with its darker bell in the middle
+  const disc = mergeGeometries([
+    new THREE.CylinderGeometry(rr * 0.82, rr * 0.82, 0.025, 28).rotateZ(Math.PI / 2).translate(hw - 0.1, 0, 0),
+    new THREE.CylinderGeometry(rr * 0.4, rr * 0.4, 0.05, 20).rotateZ(Math.PI / 2).translate(hw - 0.085, 0, 0),
+  ]);
+  // a raised band on the side of the tyre, where the lettering would be
+  const wall = lathe([[R - 0.026, hw - 0.011], [R - 0.03, hw - 0.006], [R - 0.062, hw + 0.0015]]);      // (in this order it faces outward)
+  return { tyre, rim: mergeGeometries(parts.map(g => g.toNonIndexed())), cap: mergeGeometries(cap.map(g => g.toNonIndexed())), disc, wall };
 }
 
 // Returns a car whose root origin is the centre of gravity projected on the ground, facing +Z, with
@@ -255,6 +279,7 @@ export function buildCarMesh(spec, colour) {
     add(new THREE.BoxGeometry(0.1, 0.022, 0.05), dark, side * (mAt.beltX + 0.03), mAt.belt + 0.03, mz);
     mirrorPanes.push(add(new THREE.PlaneGeometry(0.17, 0.1).rotateY(Math.PI), dark, mx, mAt.belt + 0.075, mz - 0.04, body, false));
   }
+  addDetails({ spec, shell, body, front, rear, mats: { paint, dark, chrome, grille: grilleMat, lamps, decal }, rz });
   // wipers, aerial, roof rails
   for (const x of [0.32, -0.22]) add(new THREE.BoxGeometry(0.5, 0.012, 0.022), dark, x, shell.top(cowl - 0.05) + 0.012, cowl - 0.05, body, false);
   const finZ = s.glass.rear[1] + 0.14;
@@ -311,6 +336,7 @@ export function buildCarMesh(spec, colour) {
 
   // ---- wheels sit on the root so they stay planted while the chassis rolls
   const wheels = [], wg = wheelGeometry(R, spec.wheel);
+  const wallMat = std({ color: 0x222428, roughness: 0.7 });
   const caliperMat = std({ color: spec.wheel.caliper ?? 0x3a3d42, roughness: 0.5, metalness: 0.4 });
   const caliperGeo = new THREE.BoxGeometry(0.05, R * 0.3, R * 0.52);
   for (const [z, isFront] of [[a, true], [-b, false]]) {
@@ -324,6 +350,8 @@ export function buildCarMesh(spec, colour) {
       add(wg.tyre, tyreMat, 0, 0, 0, face);
       add(wg.rim, rimMat, 0, 0, 0, face);
       add(wg.disc, discMat, 0, 0, 0, face, false);
+      add(wg.cap, chrome, 0, 0, 0, face, false);
+      add(wg.wall, wallMat, 0, 0, 0, face, false);
       add(caliperGeo, caliperMat, side * (spec.wheel.width / 2 - 0.1), R * 0.2, -R * 0.36, pivot, false);
       root.add(pivot);
       wheels.push({ pivot, spin, front: isFront });
