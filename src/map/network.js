@@ -4,10 +4,11 @@
 const LIMIT = { motorway: 80, trunk: 70, primary: 50, secondary: 50, tertiary: 50 };
 export const limitOf = road => road.ms || LIMIT[road.k.replace(/_link$/, '')] || 30;
 
-// Which level a road is on: 1 a bridge the game builds, -1 an underpass, 0 the ground.
-export const levelOf = road => (road.dk ? 1 : road.tn && road.c === 'drive' && road.k !== 'service' && road.len > 40 ? -1 : 0);
+// Which level a road is on: 1 (or 2, 3 for the decks of an expressway stacked over each other) a bridge the
+// game builds, -1 an underpass, 0 the ground.
+export const levelOf = road => (road.dk ? Math.max(1, Math.min(3, road.br || 1)) : road.tn && road.c === 'drive' && road.k !== 'service' && road.len > 40 ? -1 : 0);
 
-// Streets are the drivable roads that get markings and kerbs; driveways and the elevated expressway are left out.
+// Streets are the drivable roads that get markings and kerbs; driveways are left out.
 export function analyseStreets(map) {
   const uses = new Map();
   const streets = map.roads

@@ -44,45 +44,111 @@ export async function loadMap(dir) {
       grid[j * nx + i] = land[j * nx + i] ? Math.max(LAND_MIN, hAt(x0 + i * GROUND_CELL, z0 + j * GROUND_CELL)) : SEA_BED;
     }
   }
-  const built = shapeRoads(map, grid, land, nx, nz), deckAt = deckFinder(built.decks);
+  const built = shapeRoads(map, grid, land, nx, nz), find = deckFinder(built.decks), found = find.found;
   const terrain = map.ground = gridSampler(grid, nx, nz, GROUND_CELL, x0, z0);
-  // Bridges and the lid over an underpass lie over the ground. top: the uppermost surface.
-  // surfaceAt: the surface something at height y stands on - the deck if it is on it, the ground if it is underneath.
-  Object.assign(map, { decks: built.decks, cuts: built.cuts, steepest: built.steepest, deckAt });
-  // A bridge's deck and the ground at its two ends never agree to the centimetre: over the first and
-  // last few metres the surface goes from the one to the other.
-  const over = (x, z) => {
-    const d = deckAt(x, z);
-    if (d && d.deck.kind === 'lid') {
-      // the lid meets the ground at its sides: over its outer EDGE metres it goes from its own height to the ground's
-      // (at its two ends it stops at the portal: a wall, with a parapet on top)
-      // Outside the portal's wall, in that outer strip, it comes down to the ground towards the ends as well.
-      const out = d.d - (d.deck.half - EDGE), end = Math.min(d.s, d.deck.s.at(-1) - d.s);
-      if (out > 0) d.h += (terrain(x, z) - d.h) * Math.min(1, Math.max(out / EDGE, 1 - (end - 0.3) / EDGE));
-    } else if (d && d.deck.join) {
-      const total = d.deck.s.at(-1), reach = Math.min(8, total / 2), first = d.s < total / 2, end = first ? d.s : total - d.s;
-      if (end < reach) d.h += d.deck.join[first ? 0 : 1] * (1 - end / reach);
-    }
-    return d;
-  };
-  // how far the ground at each end of a bridge is off the deck (nothing, if the bridge ends in mid-air)
+  Object.assign(map, { decks: built.decks, cuts: built.cuts, steepest: built.steepest });
+  // how far the ground at each end of a bridge is off the deck (nothing, where it does not come down to the ground)
   for (const deck of built.decks) {
     if (deck.kind !== 'bridge') continue;
-    deck.join = [0, deck.pts.length - 1].map(k => { const off = terrain(deck.pts[k][0], deck.pts[k][1]) - deck.h[k]; return Math.abs(off) < 2.2 ? off : 0; });
+    deck.join = [0, deck.pts.length - 1].map((k, i) => { const off = terrain(deck.pts[k][0], deck.pts[k][1]) - deck.h[k]; return deck.landed[i] && Math.abs(off) < 2.2 ? off : 0; });
   }
-  map.top = (x, z) => { const d = over(x, z); return d ? d.h : terrain(x, z); };
-  map.surfaceAt = (x, z, y) => { const d = over(x, z); return d && !(y < d.h - 2.2) ? d.h : terrain(x, z); };
-  // the height a road lies at: one that passes under a deck stays on the ground
-  map.heightFor = road => (road && road.low ? terrain : map.top);
+  // The decks over (x, z), their heights made to meet the ground where they should: a bridge's deck and the
+  // ground at its ends never agree to the centimetre, and the lid of an underpass meets the ground at its sides.
+  const over = (x, z) => {
+    const count = find(x, z);
+    for (let i = 0; i < count; i++) {
+      const d = found[i];
+      if (d.deck.kind === 'lid') {
+        // over its outer EDGE metres the lid goes from its own height to the ground's (at its two ends it
+        // stops at the portal, a wall with a parapet on top; outside that wall it comes down likewise)
+        const out = d.d - (d.deck.half - EDGE), end = Math.min(d.s, d.deck.s.at(-1) - d.s);
+        if (out > 0) d.h += (terrain(x, z) - d.h) * Math.min(1, Math.max(out / EDGE, 1 - (end - 0.3) / EDGE));
+      } else {
+        const total = d.deck.s.at(-1), reach = Math.min(8, total / 2), first = d.s < total / 2, end = first ? d.s : total - d.s;
+        if (end < reach) d.h += d.deck.join[first ? 0 : 1] * (1 - end / reach);
+      }
+    }
+    return count;
+  };
+  // Bridges, the decks of the expressway and the lid over an underpass lie over the ground, sometimes one over another.
+  // top: the uppermost surface.
+  // the deck something at height y stands on: the highest one not above it (null: it is on the ground)
+  let count = 0;
+  const standing = (x, z, y) => {
+    count = over(x, z);
+    // Of the decks at about its own height, the one nearest it in height (so that what is on a deck stays
+    // on it where another passes close over or under); failing that, the highest below it.
+    let best = null, level = null;
+    for (let i = 0; i < count; i++) {
+      const d = found[i];
+      if (y < d.h - 2.2) continue;
+      if (!best || d.h > best.h) best = d;
+      if (Math.abs(d.h - y) <= 2.2 && (!level || Math.abs(d.h - y) < Math.abs(level.h - y))) level = d;
+    }
+    return level || best;
+  };
+  // Where a ramp runs into a carriageway (see deck.mates) the two decks overlap, a little apart in height
+  // until they have become one: near the place they join, the surface goes over from the one to the other
+  // across the overlap. Only decks that do join, and none above whoever asks.
+  const NEAR_JOIN = 90, MERGE = 1.3;
+  const mate = (deck, other, x, z) => deck.mates.some(m => m.deck === other && Math.hypot(m.x - x, m.z - z) < NEAR_JOIN);
+  const merged = (best, x, z, y) => {
+    if (!best.deck.mates.length) return best.h;
+    let sum = 0, weight = 0;
+    for (let i = 0; i < count; i++) {
+      const d = found[i], gap = Math.abs(d.h - best.h);
+      if (d !== best && (gap > MERGE || y < d.h - 2.2 || !mate(best.deck, d.deck, x, z))) continue;
+      // (the further apart in height, the less the other deck counts: by MERGE they are two surfaces)
+      const w = Math.max(0.03, 1 - d.d / d.deck.half) * (1 - gap / MERGE);
+      sum += d.h * w;
+      weight += w;
+    }
+    return sum / weight;
+  };
+  map.top = (x, z) => { const d = standing(x, z, Infinity); return d ? (d.deck.kind === 'bridge' ? merged(d, x, z, Infinity) : d.h) : terrain(x, z); };
+  // surfaceAt: the surface something at height y stands on - a deck if it is on one, else the ground.
+  map.surfaceAt = (x, z, y) => { const d = standing(x, z, y); return d ? (d.deck.kind === 'bridge' ? merged(d, x, z, y) : d.h) : terrain(x, z); };
+  // do these two decks run into each other near here?
+  map.joined = (a, b, x, z) => mate(a, b, x, z);
+  map.MERGE = MERGE;
+  // (the deck itself, for those who need to know which)
+  map.deckAt = (x, z, y = Infinity) => { const d = standing(x, z, y); return d ? d.deck : null; };
+  // any deck here at all, at any height? and all of them, with their heights there: [{ deck, h }]
+  map.covered = (x, z) => find(x, z) > 0;
+  // (to be read at once: the entries are overwritten by the next question put to the map)
+  map.decksAt = (x, z) => { const n = over(x, z); return found.slice(0, n); };
+  // which level something at height y is on: that of the bridge it stands on (1, or higher on an
+  // expressway's upper decks), -1 in an underpass, 0 otherwise
+  map.levelAt = (x, z, y) => {
+    const n = over(x, z);
+    let best = null, roofed = false;
+    for (let i = 0; i < n; i++) {
+      const d = found[i];
+      if (y < d.h - 2.2) { if (d.deck.kind === 'lid') roofed = true; continue; }
+      if (!best || d.h > best.h) best = d;
+    }
+    return best && best.deck.kind === 'bridge' ? best.deck.level : !best && roofed ? -1 : 0;
+  };
+  // The height a road lies at. A bridge: its own deck (there may be others over or under it). A road that
+  // passes under a deck: the ground. Any other: the ground, or the lid of an underpass where it crosses one.
+  const onDeck = deck => (x, z) => {
+    const n = over(x, z);
+    for (let i = 0; i < n; i++) if (found[i].deck === deck) return found[i].h;
+    // off it by a little (a sign post beside it, a point a hair past its end): as high as the nearest point of it
+    let near = 0, far = Infinity;
+    for (let k = 0; k < deck.pts.length; k++) { const q = Math.hypot(x - deck.pts[k][0], z - deck.pts[k][1]); if (q < far) { far = q; near = k; } }
+    return deck.h[near] + (near === 0 ? deck.join[0] : near === deck.pts.length - 1 ? deck.join[1] : 0);
+  };
+  const onGround = (x, z) => { const n = over(x, z); for (let i = 0; i < n; i++) if (found[i].deck.kind === 'lid') return found[i].h; return terrain(x, z); };
+  for (const deck of built.decks) if (deck.kind === 'bridge') deck.lie = onDeck(deck);
+  map.heightFor = road => (road?.deck ? road.deck.lie : road?.low ? terrain : onGround);
   // A footbridge runs straight from the height of one end to that of the other (the heights it would
   // need to clear a street are not in the data), and never below what it crosses.
   for (const road of map.roads) {
     if (road.c !== 'walk' || !road.br) continue;
-    const p = road.p, ax = p[0], az = p[1], dx = p.at(-2) - ax, dz = p.at(-1) - az, len2 = dx * dx + dz * dz || 1, h0 = map.top(ax, az), h1 = map.top(p.at(-2), p.at(-1));
-    road.lie = (x, z) => Math.max(map.top(x, z), h0 + (h1 - h0) * Math.min(1, Math.max(0, ((x - ax) * dx + (z - az) * dz) / len2)));
+    const p = road.p, ax = p[0], az = p[1], dx = p.at(-2) - ax, dz = p.at(-1) - az, len2 = dx * dx + dz * dz || 1, under = map.heightFor(null), h0 = under(ax, az), h1 = under(p.at(-2), p.at(-1));
+    road.lie = (x, z) => Math.max(under(x, z), h0 + (h1 - h0) * Math.min(1, Math.max(0, ((x - ax) * dx + (z - az) * dz) / len2)));
   }
-  // which level something at height y is on: 1 on a bridge, -1 in an underpass, 0 otherwise
-  map.levelAt = (x, z, y) => { const d = over(x, z); return !d ? 0 : d.deck.kind === 'bridge' ? (y < d.h - 2.2 ? 0 : 1) : y < d.h - 2.2 ? -1 : 0; };
 
   // { b: buildings, nb: outlines of neighbouring buildings, areas, lines } for zone column i, row j
   // (a zone with nothing in it but the ground has no file)
@@ -105,6 +171,7 @@ export async function loadMap(dir) {
 // (stretches of road that ended up below the ground beside them; nothing is built along those yet -
 // the ground simply slopes down to them).
 export const EDGE = 3;
+const RAMP = 0.07, LIFT = { 1: 12, 2: 21, 3: 30 };     // an expressway: its steepest, and how high its decks stand
 const GRADE = 0.12, DEPTH = 5.4, CLEAR = 5.6, STEP = 2.5, LID = 9.5;     // LID: how far the lid of an underpass reaches beyond the carriageway
 function shapeRoads(map, grid, land, nx, nz) {
   const before = gridSampler(grid.slice(), nx, nz, GROUND_CELL, map.x0, map.z0);
@@ -135,18 +202,65 @@ function shapeRoads(map, grid, land, nx, nz) {
   for (let i = 0; i < count; i++) if (nodeOf[i] < 0) nodeOf[i] = nodeCount++;
   const edges = Array.from({ length: nodeCount }, () => []);
   const distance = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  // An expressway on stilts (see express()): its decks are not straight spans from bank to bank but long
+  // chains of them, so their heights are worked out point by point like a road's.
+  const express = road => !!road.dk && /^(trunk|motorway)/.test(road.k);
+  const grounded = new Uint8Array(nodeCount), spans = Array.from({ length: nodeCount }, () => null);
   for (const { road, pts, at } of lines) {
-    const limit = road.k === 'service' ? 0.2 : GRADE;
+    const limit = road.k === 'service' ? 0.2 : express(road) ? RAMP : GRADE;
+    for (let k = 0; k < pts.length; k++) if (!road.dk) grounded[nodeOf[at + k]] = 1;
     for (let k = 1; k < pts.length; k++) {
-      const a = nodeOf[at + k - 1], b = nodeOf[at + k], rise = limit * distance(pts[k - 1], pts[k]);
+      const a = nodeOf[at + k - 1], b = nodeOf[at + k], far = distance(pts[k - 1], pts[k]), rise = limit * far;
       if (a === b) continue;
       edges[a].push(b, rise);
       edges[b].push(a, rise);
+      if (express(road)) { (spans[a] ||= []).push(b, far); (spans[b] ||= []).push(a, far); }
+    }
+  }
+  // Where two decks run into each other (a ramp joining a carriageway, a carriageway dividing) they lie
+  // side by side, overlapping, for some way before they are one: there they must be at one height. Their
+  // points that lie over each other near the place they join are tied together, a hand's breadth apart at most.
+  {
+    const meeting = new Map();
+    for (const line of lines) {
+      if (!line.road.dk) continue;
+      const mine = new Set();
+      for (let k = 0; k < line.pts.length; k++) {
+        const n = nodeOf[line.at + k];
+        if (mine.has(n)) continue;
+        mine.add(n);
+        if (!meeting.has(n)) meeting.set(n, []);
+        meeting.get(n).push([line, k]);
+      }
+    }
+    const REACH = 32;               // points either side of the join: 80 m
+    for (const list of meeting.values()) {
+      if (list.length < 2) continue;
+      for (const [a, ka] of list) {
+        for (const [b, kb] of list) {
+          if (a.at >= b.at) continue;
+          // each point of the one with the nearest point of the other, as long as the two decks overlap there
+          const side = (a.road.w + b.road.w) / 2 + 1;
+          for (let i = Math.max(0, ka - REACH); i <= Math.min(a.pts.length - 1, ka + REACH); i++) {
+            let near = -1, far = side;
+            for (let j = Math.max(0, kb - REACH); j <= Math.min(b.pts.length - 1, kb + REACH); j++) {
+              const d = distance(a.pts[i], b.pts[j]);
+              if (d < far) { far = d; near = j; }
+            }
+            if (near < 0) continue;
+            const p = nodeOf[a.at + i], q = nodeOf[b.at + near];
+            if (p === q) continue;
+            edges[p].push(q, 0.2);
+            edges[q].push(p, 0.2);
+          }
+        }
+      }
     }
   }
   // The highest heights that are nowhere above `values` and nowhere steeper than the limit:
   // every node may be at most its neighbour's height plus the rise allowed between them.
-  function under(values) {
+  // (links: which graph to follow - the roads with the rise allowed along them, unless told otherwise)
+  function under(values, links = edges) {
     const out = Float64Array.from(values), heap = [], done = new Uint8Array(nodeCount);
     const push = (v, n) => {
       let i = heap.length;
@@ -174,13 +288,16 @@ function shapeRoads(map, grid, land, nx, nz) {
       const [v, n] = pop();
       if (done[n] || v > out[n]) continue;
       done[n] = 1;
-      for (let e = 0; e < edges[n].length; e += 2) {
-        const m = edges[n][e], reach = v + edges[n][e + 1];
+      const out2 = links[n] || [];
+      for (let e = 0; e < out2.length; e += 2) {
+        const m = out2[e], reach = v + out2[e + 1];
         if (reach < out[m]) { out[m] = reach; push(reach, m); }
       }
     }
     return out;
   }
+  // how far each point of the expressway is, along it, from where it meets a road on the ground
+  const toGround = under(Array.from(grounded, g => (g ? 0 : Infinity)), spans);
   // Start from the terrain under each road, evened out; a bridge starts as a straight line between its ends.
   const start = new Float32Array(nodeCount), members = new Float32Array(nodeCount);
   for (const { road, pts, at } of lines) {
@@ -188,7 +305,10 @@ function shapeRoads(map, grid, land, nx, nz) {
     pts.forEach((_, k) => {
       let sum = 0, n = 0;
       for (let m = Math.max(0, k - WINDOW); m <= Math.min(pts.length - 1, k + WINDOW); m++) { sum += raw[m]; n++; }
-      start[nodeOf[at + k]] += road.dk ? raw[0] + (raw.at(-1) - raw[0]) * k / Math.max(1, pts.length - 1) : sum / n;
+      // an expressway stands as high over the ground (or the water) as its level asks, coming down to
+      // the ground along its ramps: how high depends on how far along it the nearest ground is
+      const node = nodeOf[at + k], lift = Math.min(LIFT[road.br] || LIFT[1], toGround[node] * RAMP * 0.8);
+      start[node] += express(road) ? Math.max(0.5, sum / n) + lift : road.dk ? raw[0] + (raw.at(-1) - raw[0]) * k / Math.max(1, pts.length - 1) : sum / n;
       members[nodeOf[at + k]]++;
     });
   }
@@ -197,8 +317,9 @@ function shapeRoads(map, grid, land, nx, nz) {
   // is also within the limit, and moves the least earth.
   const cutDown = under(start), filled = under(start.map(v => -v)), natural = new Float32Array(nodeCount);
   for (let n = 0; n < nodeCount; n++) natural[n] = (cutDown[n] - filled[n]) / 2;
-  // a bridge's deck: straight between the heights of its two ends
+  // a bridge's deck: straight between the heights of its two ends (an expressway's: as worked out, point by point)
   const deckOf = (line, heights) => line.pts.map((_, k) => {
+    if (express(line.road)) return heights[nodeOf[line.at + k]];
     const a = heights[nodeOf[line.at]], b = heights[nodeOf[line.at + line.pts.length - 1]];
     return a + (b - a) * k / Math.max(1, line.pts.length - 1);
   });
@@ -239,6 +360,7 @@ function shapeRoads(map, grid, land, nx, nz) {
     return found;
   };
   // caps: heights some nodes may not rise above. The roads near them slope down to meet them.
+  const floors = new Float64Array(nodeCount).fill(-Infinity);
   const caps = new Float32Array(nodeCount).fill(Infinity), rides = new Uint8Array(count), riding = new Float32Array(count), nearest = new Float32Array(count).fill(Infinity), decks = [];
   for (const line of lines) {
     const { road, pts, at } = line;
@@ -260,27 +382,50 @@ function shapeRoads(map, grid, land, nx, nz) {
           if (far < nearest[i]) { nearest[i] = far; riding[i] = lid[k]; }       // the height of the lid where it is closest
         });
       });
-      decks.push({ kind: 'lid', road, pts, h: lid, half });
+      decks.push({ kind: 'lid', road, level: 0, pts, h: lid, half, landed: [false, false], chained: [false, false], mates: [] });
     } else if (road.dk) {
       const deck = deckOf(line, natural);
       pts.forEach(([x, z], k) => around(x, z, road.w / 2 + 12, (other, m) => {
-        if (other === line || other.road.dk || !crossing(line, other)) return;
+        if (other === line || !crossing(line, other)) return;
         if (Math.hypot(other.pts[m][0] - x, other.pts[m][1] - z) > road.w / 2 + other.road.w / 2 + 1.5) return;
+        if (other.road.dk) {
+          // one deck of the expressway over another: the upper one keeps clear of the lower
+          if (express(road) && express(other.road) && (other.road.br || 1) < (road.br || 1)) floors[nodeOf[at + k]] = Math.max(floors[nodeOf[at + k]], natural[nodeOf[other.at + m]] + CLEAR + 1);
+          return;
+        }
         other.road.low = true;
         const n = nodeOf[other.at + m];
-        caps[n] = Math.min(caps[n], deck[k] - CLEAR);
+        // a bridge between two banks stays where it is and the road dips under it; an expressway is
+        // carried up over the road instead
+        if (express(road)) floors[nodeOf[at + k]] = Math.max(floors[nodeOf[at + k]], natural[n] + CLEAR);
+        else caps[n] = Math.min(caps[n], deck[k] - CLEAR);
       }));
     }
   }
-  const capped = under(caps), level = new Float32Array(nodeCount);
-  for (let n = 0; n < nodeCount; n++) level[n] = Math.min(natural[n], capped[n]);
+  // floors: the least height of some nodes. What is linked to them rises to meet them, as it sinks to meet the caps.
+  const raised = under(floors.map(v => -v)), capped = under(caps), level = new Float32Array(nodeCount);
+  for (let n = 0; n < nodeCount; n++) level[n] = Math.min(Math.max(natural[n], -raised[n]), capped[n]);
   const h = new Float32Array(count), unbuilt = new Float32Array(count);       // per sample: as built, and as it would lie with nothing built
   for (let i = 0; i < count; i++) { h[i] = rides[i] ? riding[i] : level[nodeOf[i]]; unbuilt[i] = natural[nodeOf[i]]; }
+  // how many decks pass through each node
+  const decked = new Uint8Array(nodeCount);
+  for (const line of lines) {
+    if (!line.road.dk) continue;
+    const mine = new Set();
+    for (let k = 0; k < line.pts.length; k++) mine.add(nodeOf[line.at + k]);
+    for (const n of mine) decked[n]++;
+  }
   for (const line of lines) {
     if (!line.road.dk) continue;
     const deck = deckOf(line, level);
     deck.forEach((v, k) => { h[line.at + k] = v; });
-    decks.push({ kind: 'bridge', road: line.road, pts: line.pts, h: deck, half: line.road.w / 2 + 0.7 });
+    // an end is on the ground where a road of the ground joins it; else it runs on into the next deck, or stops in mid-air
+    const first = nodeOf[line.at], last = nodeOf[line.at + line.pts.length - 1];
+    // (another deck meets it there - at that deck's end, or part-way along it where a ramp leaves or joins)
+    const joined = n => decked[n] > 1;
+    line.road.deck = { kind: 'bridge', road: line.road, level: line.road.br || 1, pts: line.pts, h: deck, half: line.road.w / 2 + 0.7,
+      landed: [!!grounded[first], !!grounded[last]], chained: [!grounded[first] && joined(first), !grounded[last] && joined(last)] };
+    decks.push(line.road.deck);
   }
   let steepest = 0;
   for (const { road, pts, at } of lines) {
@@ -295,8 +440,8 @@ function shapeRoads(map, grid, land, nx, nz) {
     const flat = road.w / 2 + SHOULDER, rank = road.k === 'service' ? 0.02 : 1;
     let run = null;
     pts.forEach(([x, z], k) => {
-      // of a bridge only the first and last few metres are on the ground: its abutments
-      if (road.dk && k > 1 && k < pts.length - 2) return;
+      // of a bridge only the first and last few metres are on the ground: its abutments (where it has any)
+      if (road.dk && !((k <= 1 && road.deck.landed[0]) || (k >= pts.length - 2 && road.deck.landed[1]))) return;
       const height = h[at + k], drop = rides[at + k] || road.dk ? 0 : unbuilt[at + k] - height;
       if (rides[at + k] === 1) { run = null; return; }
       // sunk by an underpass or to pass under a bridge: the ground steps down at the edge of the road
@@ -325,6 +470,21 @@ function shapeRoads(map, grid, land, nx, nz) {
   for (let c = 0; c < grid.length; c++) {
     if (land[c] && weight[c] > 0) grid[c] += (Math.max(LAND_MIN, sum[c] / weight[c]) - grid[c]) * most[c];
   }
+  // Which decks run into each other, and where: there the two are one surface for a stretch.
+  const through = new Map();
+  for (const line of lines) {
+    if (!line.road.dk) continue;
+    const mine = new Set();
+    for (let k = 0; k < line.pts.length; k++) {
+      const n = nodeOf[line.at + k];
+      if (decked[n] < 2 || mine.has(n)) continue;
+      mine.add(n);
+      if (!through.has(n)) through.set(n, []);
+      through.get(n).push([line.road.deck, line.pts[k]]);
+    }
+  }
+  for (const deck of decks) deck.mates = [];
+  for (const list of through.values()) for (const [a, at] of list) for (const [b] of list) if (a !== b) a.mates.push({ deck: b, x: at[0], z: at[1] });
   // how far along each deck its points are
   for (const deck of decks) {
     deck.s = [0];
@@ -333,15 +493,20 @@ function shapeRoads(map, grid, land, nx, nz) {
   return { decks, cuts: cuts.filter(c => c.pts.length > 3), steepest };
 }
 
-// Which deck, if any, is over (x, z), and how high it is there. The answer is one object, reused.
+// The decks over (x, z): fills `found` with { deck, h, s, d } for each (height there, distance along it and
+// from its centre line) and returns how many. The entries are reused from call to call.
 function deckFinder(decks) {
-  const CELL = 24, cells = new Map(), cellOf = v => Math.floor(v / CELL), found = { deck: null, h: 0, s: 0, d: 0 };
+  const CELL = 24, cells = new Map(), cellOf = v => Math.floor(v / CELL), found = [];
   for (const deck of decks) {
     const n = deck.pts.length;
-    // the directions the deck leaves its two ends in: a point behind either end is not on it
-    deck.ends = [[deck.pts[0], deck.pts[1]], [deck.pts[n - 1], deck.pts[n - 2]]].map(([e, inner]) => { const l = Math.hypot(inner[0] - e[0], inner[1] - e[1]) || 1; return { x: e[0], z: e[1], ux: (inner[0] - e[0]) / l, uz: (inner[1] - e[1]) / l }; });
+    // The directions the deck leaves its two ends in: a point behind either end is not on it. An end
+    // that runs on into another deck reaches a little past, so that there is no gap between the two.
+    deck.ends = [[deck.pts[0], deck.pts[1]], [deck.pts[n - 1], deck.pts[n - 2]]].map(([e, inner], i) => {
+      const l = Math.hypot(inner[0] - e[0], inner[1] - e[1]) || 1;
+      return { x: e[0], z: e[1], ux: (inner[0] - e[0]) / l, uz: (inner[1] - e[1]) / l, inset: deck.chained[i] ? -1.5 : 0.3 };
+    });
     for (let k = 1; k < deck.pts.length; k++) {
-      const [ax, az] = deck.pts[k - 1], [bx, bz] = deck.pts[k], pad = deck.half + 0.5;
+      const [ax, az] = deck.pts[k - 1], [bx, bz] = deck.pts[k], pad = deck.half + 2;
       for (let i = cellOf(Math.min(ax, bx) - pad); i <= cellOf(Math.max(ax, bx) + pad); i++) {
         for (let j = cellOf(Math.min(az, bz) - pad); j <= cellOf(Math.max(az, bz) + pad); j++) {
           const key = i * 8192 + j;
@@ -351,25 +516,33 @@ function deckFinder(decks) {
       }
     }
   }
-  return (x, z) => {
+  const finder = (x, z) => {
     const list = cells.get(cellOf(x) * 8192 + cellOf(z));
-    if (!list) return null;
-    let best = Infinity;
+    if (!list) return 0;
+    let count = 0;
     for (const [deck, k] of list) {
       const [ax, az] = deck.pts[k - 1], [bx, bz] = deck.pts[k], dx = bx - ax, dz = bz - az;
-      const raw = ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz || 1);
       // beyond the ends of the deck there is no deck
-      if (deck.ends.some(e => (x - e.x) * e.ux + (z - e.z) * e.uz < 0.3)) continue;
-      const t = Math.min(1, Math.max(0, raw)), d = Math.hypot(x - ax - dx * t, z - az - dz * t);
-      if (d > deck.half || d >= best) continue;
-      best = d;
-      found.deck = deck;
-      found.d = d;
-      found.h = deck.h[k - 1] + (deck.h[k] - deck.h[k - 1]) * t;
-      found.s = deck.s[k - 1] + (deck.s[k] - deck.s[k - 1]) * t;
+      if (deck.ends.some(e => (x - e.x) * e.ux + (z - e.z) * e.uz < e.inset)) continue;
+      const raw = ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz || 1);
+      // (past a chained end the last stretch carries on straight)
+      const reach = 1.6 / (Math.hypot(dx, dz) || 1);
+      const t = Math.min(k === deck.pts.length - 1 ? 1 + reach : 1, Math.max(k === 1 ? -reach : 0, raw)), d = Math.hypot(x - ax - dx * t, z - az - dz * t);
+      if (d > deck.half) continue;
+      let entry = null;
+      for (let i = 0; i < count; i++) if (found[i].deck === deck) entry = found[i];
+      if (entry && entry.d <= d) continue;
+      if (!entry) entry = found[count] ||= { deck: null, h: 0, s: 0, d: 0 }, count++;
+      const u = Math.min(1, Math.max(0, t));
+      entry.deck = deck;
+      entry.d = d;
+      entry.h = deck.h[k - 1] + (deck.h[k] - deck.h[k - 1]) * u;
+      entry.s = deck.s[k - 1] + (deck.s[k] - deck.s[k - 1]) * u;
     }
-    return best < Infinity ? found : null;
+    return count;
   };
+  finder.found = found;
+  return finder;
 }
 
 export function pointInPolygon(x, z, p) {

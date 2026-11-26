@@ -113,13 +113,14 @@ function pointBack(pts, back) {
 export function buildStreets(ctx, zone) {
   const { map, atlas, kit, nearRoad, stops } = ctx, { owns } = zone, rand = seeded(7 + zone.seed);
   const white = [], yellow = [], sidewalks = [], posts = [], lamps = [], grit = seeded(91 + zone.seed);
-  // Things lie on the uppermost surface, except those of a street that passes under a deck.
-  let low = false;
-  const ground = (x, z) => (low ? ctx.ground(x, z) : ctx.top(x, z)), strips = [white, yellow, sidewalks], done = [0, 0, 0];
+  // Things lie where their street does: on its own deck if it is a bridge, else on the ground (or the lid of an underpass).
+  let height = map.heightFor(null), current = null;       // the street being worked on, and the height its things lie at
+  const ground = (x, z) => height(x, z), strips = [white, yellow, sidewalks], done = [0, 0, 0];
   // the strips laid since the last call belong to the street being worked on then
   const turnTo = street => {
-    strips.forEach((list, i) => { for (let k = done[i]; k < list.length; k++) list[k].low = low; done[i] = list.length; });
-    low = !!street?.road.low;
+    strips.forEach((list, i) => { for (let k = done[i]; k < list.length; k++) list[k].road = current; done[i] = list.length; });
+    current = street?.road || null;
+    height = map.heightFor(current);
   };
   const signs = new QuadBatch(atlas);
   const inst = {};
@@ -694,14 +695,14 @@ export function buildStreets(ctx, zone) {
 
   // ---------- meshes ----------
   const group = new THREE.Group(), seasonal = [];
-  const lie = (x, z, it) => (it.low ? ctx.ground(x, z) : ctx.top(x, z));
+  const lie = (x, z, it) => map.heightFor(it.road)(x, z);
   const paintY = (x, z, it) => lie(x, z, it) + LAYER.mark;
   // long lines are cut where the zone ends; short pieces (dashes, crossings) were already chosen whole
   const split = (items, color) => [
     ribbonMesh(items.filter(i => !i.whole), color, paintY, 5, { owns }), ribbonMesh(items.filter(i => i.whole), color, paintY, 5),
   ];
   const walk = ribbonMesh(sidewalks, 0xb9b6ae, (x, z, it) => lie(x, z, it) + LAYER.sidewalk, 4, { snow: 0.85, owns });
-  group.add(walk, ribbonMesh(corners, 0xb9b6ae, (x, z) => ctx.top(x, z) + LAYER.sidewalk, 4, { snow: 0.85 }), ...split(white, 0xe8e8e2), ...split(yellow, 0xe0b62e), paintMesh(arrowPos, arrowIdx, 0xe8e8e2, 5));
+  group.add(walk, ribbonMesh(corners, 0xb9b6ae, (x, z) => map.heightFor(null)(x, z) + LAYER.sidewalk, 4, { snow: 0.85 }), ...split(white, 0xe8e8e2), ...split(yellow, 0xe0b62e), paintMesh(arrowPos, arrowIdx, 0xe8e8e2, 5));
 
   for (const [name, list] of Object.entries(inst)) {
     const [geo, mat] = kit.kinds[name], mesh = new THREE.InstancedMesh(geo, mat, list.length);

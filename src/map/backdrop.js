@@ -36,7 +36,7 @@ export function buildBackdrop() {
   // (the hills north of the town, Jangsan among them, are in the map itself now: only what lies past its
   // northern and western edges is made up here)
   const hills = new THREE.Group();
-  for (const [x, z, r, h, seed] of [[-4200, -6500, 2000, 420, 23], [2500, -12500, 2400, 520, 7], [7500, -12800, 2300, 450, 41]]) {
+  for (const [x, z, r, h, seed] of [[-7200, -6500, 2000, 420, 23], [2500, -12500, 2400, 520, 7], [7500, -12800, 2300, 450, 41], [-7400, 1200, 2100, 400, 57]]) {
     hills.add(new THREE.Mesh(mountain(x, z, r, h, seed), land));
   }
 
@@ -79,7 +79,8 @@ export function buildBackdrop() {
   lightGeo.setAttribute('position', new THREE.Float32BufferAttribute(lights, 3));
   const lamps = new THREE.Points(lightGeo, new THREE.PointsMaterial({ color: 0xffd9a0, size: 3, sizeAttenuation: false, transparent: true, opacity: 0, fog: false, depthWrite: false, toneMapped: false }));
   bridge.add(lamps);
-  group.add(hills, bridge);
+  // (the Gwangan bridge is part of the map now and is built there, see decks.js: this stand-in is left out)
+  group.add(hills);
 
   const cableMat = bridge.children.find(c => c.isLineSegments).material, landBase = new THREE.Color(0x4f6a52), steelBase = new THREE.Color(0x8b949c);
   return {

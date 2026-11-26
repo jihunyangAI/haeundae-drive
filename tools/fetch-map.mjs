@@ -4,7 +4,8 @@
 // Usage: node tools/fetch-map.mjs
 
 import { mkdir, writeFile } from 'node:fs/promises';
-import { REGION, bbox, boxes, tileX, tileY } from './region.mjs';
+import { readFile } from 'node:fs/promises';
+import { REGION, bbox, boxes, projection, tileX, tileY } from './region.mjs';
 
 const UA = 'map-validation-script/0.1';
 const RAW = new URL('../data/raw/', import.meta.url);
@@ -43,10 +44,16 @@ async function ask(query, what) {
 // (Buildings are not asked for: they come from the building register, see fetch-buildings.mjs.)
 // Streets and what stands along them: only where the map has them (the town and the coast road), a
 // box at a time. The shore, woods and fields: over the whole rectangle, since the ground is drawn all over it.
+// With `--add=3,4,expressway,shore` only those pieces are asked for and merged into what is already there
+// (the pieces are numbered as printed); with `--tiles` only the elevation tiles are fetched.
+const only = process.argv.find(a => a.startsWith('--add='))?.slice(6).split(',') || null;
 async function fetchOsm() {
   const seen = new Map(), add = list => { for (const e of list) seen.set(`${e.type}${e.id}`, e); };
+  if (only) add(JSON.parse(await readFile(new URL('osm.json', RAW), 'utf8')).elements);
+  const wanted = name => !only || only.includes(String(name));
   const parts = boxes(REGION, 60);
   for (let i = 0; i < parts.length; i++) {
+    if (!wanted(i + 1)) continue;
     const b = parts[i].join(',');
     add(await ask(`[out:json][timeout:180];
 (
@@ -60,8 +67,13 @@ async function fetchOsm() {
 );
 out geom;`, `part ${i + 1}/${parts.length}`));
   }
+  // the expressway, in the box where nothing else is mapped
+  if (wanted('expressway')) {
+    const e = REGION.expressway, { toGeo } = projection(), [north, west] = toGeo(e.x0, e.z0), [south, east] = toGeo(e.x1, e.z1);
+    add(await ask(`[out:json][timeout:120];(way["highway"~"^(trunk|trunk_link|motorway|motorway_link)$"](${south},${west},${north},${east}););out geom;`, 'expressway'));
+  }
   const whole = bbox(REGION, 30).join(',');
-  add(await ask(`[out:json][timeout:180];
+  if (wanted('shore')) add(await ask(`[out:json][timeout:180];
 (
   way["natural"~"coastline|wood|beach|sand|water"](${whole});
   way["landuse"~"forest|farmland|orchard|meadow"](${whole});
@@ -95,7 +107,7 @@ async function fetchTiles(z, pad, urlOf, dir, prefix) {
 
 await mkdir(RAW, { recursive: true });
 
-await writeFile(new URL('osm.json', RAW), JSON.stringify(await fetchOsm()));
+if (!process.argv.includes('--tiles')) await writeFile(new URL('osm.json', RAW), JSON.stringify(await fetchOsm()));
 const dem = await fetchTiles(DEM_Z, 250,
   (z, x, y) => `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`, RAW, 'dem_');
 await writeFile(new URL('tiles.json', RAW), JSON.stringify({ dem }));

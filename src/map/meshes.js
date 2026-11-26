@@ -146,7 +146,7 @@ export function buildRoads(roads, map, owns) {
 }
 
 export function buildWalkways(roads, map, owns) {
-  return ribbonMesh(roads.filter(r => r.c === 'walk'), 0xd9c9a3, (x, z, r) => (r.lie ? r.lie(x, z) : map.top(x, z)) + LAYER.path, 1, { snow: 0.85, owns });
+  return ribbonMesh(roads.filter(r => r.c === 'walk'), 0xd9c9a3, (x, z, r) => (r.lie ? r.lie(x, z) : map.heightFor(null)(x, z)) + LAYER.path, 1, { snow: 0.85, owns });
 }
 
 // Coastline, waterways and the marina piers.

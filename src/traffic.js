@@ -183,12 +183,14 @@ export function createTraffic(graph, options = {}) {
         for (const m of [...car.held]) release(car, m);
         car.holds = null;
       }
-      if (!car.holds && toLine < car.v * car.v / (2 * BRAKE) + 6) {
+      // (where lanes close in on each other, whoever must wait does so a car's length back, clear of the one going through)
+      const back = move.squeeze ? 7 : 0;
+      if (!car.holds && toLine < car.v * car.v / (2 * BRAKE) + 6 + back) {
         if (clear(car, move, toLine)) {
           for (const m of [move, ...car.beyond]) hold(car, m);
           car.holds = move;
           car.heldAt = time;
-        } else see(toLine - 0.4 + STANDSTILL, 0);
+        } else see(toLine - 0.4 + STANDSTILL - back, 0);
       }
       // the cars ahead across the junction: matters once it has leave to cross, and where the junction is
       // no more than a joint between two streets

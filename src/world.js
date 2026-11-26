@@ -95,7 +95,7 @@ export async function createWorld(dir) {
   // Is a road within `margin` metres of its own edge at (x, z)? kind: 'drive' for carriageways only.
   function nearRoad(x, z, margin, kind, except) {
     for (const s of segments.get(`${cellOf(x)},${cellOf(z)}`) || []) {
-      if (s.road === except || (kind === 'drive' && !drivable(s.road))) continue;
+      if (s.road === except || (kind === 'drive' && !drivable(s.road)) || (kind === 'ground' && (!drivable(s.road) || s.road.dk))) continue;
       if (distanceTo(s, x, z) < s.road.w / 2 + margin) return true;
     }
     return false;
@@ -104,7 +104,7 @@ export async function createWorld(dir) {
   // the bridge from the road under it.
   function roadAt(x, z, reach = 14, y) {
     let best = reach, found = null;
-    const level = y === undefined ? null : map.levelAt(x, z, y - LAYER.major), covered = level === 0 && !!map.deckAt(x, z);
+    const level = y === undefined ? null : map.levelAt(x, z, y - LAYER.major), covered = level === 0 && map.covered(x, z);
     for (let i = cellOf(x - reach); i <= cellOf(x + reach); i++) {
       for (let j = cellOf(z - reach); j <= cellOf(z + reach); j++) {
         for (const s of segments.get(`${i},${j}`) || []) {
@@ -224,7 +224,7 @@ export async function createWorld(dir) {
       }
     }
     // the shore acts as a sea wall: push back up the slope
-    const h = map.top(px, pz);
+    const h = py === undefined ? map.top(px, pz) : map.surfaceAt(px, pz, py);
     if (h < 0.2) {
       const gx = ground(px + 1, pz) - ground(px - 1, pz), gz = ground(px, pz + 1) - ground(px, pz - 1), g = Math.hypot(gx, gz);
       if (g > 1e-3) hit(gx / g, gz / g, Math.min(1, (0.2 - h) / (g / 2)));
@@ -246,7 +246,7 @@ export async function createWorld(dir) {
     zone.far = new THREE.Group();
     zone.far.add(
       buildTerrain(zone, ground), roads, buildWalkways(zone.roads, map, zone.owns), buildWaterfront(zone, ground),
-      buildStructures(map, zone, (x, z, road) => !nearRoad(x, z, 2, 'drive', road)),
+      buildStructures(map, zone, (x, z, road) => !nearRoad(x, z, 2, 'ground', road)),         // (a pier may stand wherever no road runs on the ground)
       buildFacades(d.b.filter(b => b.h >= TALL), ground, facadeKit, zone.seed),
     );
     group.add(zone.far);

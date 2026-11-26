@@ -5,7 +5,7 @@
 
 import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import { PNG } from 'pngjs';
-import { REGION, projection, mapped, tileX, tileY } from './region.mjs';
+import { REGION, projection, mapped, onExpressway, tileX, tileY } from './region.mjs';
 
 const RAW = new URL('../data/raw/', import.meta.url);
 const OUT = new URL(`../public/map/${REGION.id}/`, import.meta.url);
@@ -30,7 +30,8 @@ const flat = pts => pts.flatMap(p => [r2(p[0]), r2(p[1])]);
 const inside = (x, z) => x >= X0 && x <= X1 && z >= Z0 && z <= Z1 && mapped(x, z);       // where streets and buildings are mapped
 const inExtent = pts => pts.some(p => inside(p[0], p[1]));
 // Cut a polyline to the map rectangle (Liang-Barsky per segment). Returns the pieces that lie inside.
-function clipLine(pts) {
+// keep(x, z): is this point in a part of the map where such a line is wanted?
+function clipLine(pts, keep = mapped) {
   const pieces = [];
   let cur = null;
   for (let i = 1; i < pts.length; i++) {
@@ -52,12 +53,12 @@ function clipLine(pts) {
     // the point where the line between a mapped point and an unmapped one crosses the edge
     const edge = (inPt, outPt) => {
       let a = inPt, b = outPt;
-      for (let k = 0; k < 12; k++) { const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; if (mapped(mid[0], mid[1])) a = mid; else b = mid; }
+      for (let k = 0; k < 12; k++) { const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; if (keep(mid[0], mid[1])) a = mid; else b = mid; }
       return a;
     };
     let run = null;
     piece.forEach((pt, i) => {
-      if (mapped(pt[0], pt[1])) {
+      if (keep(pt[0], pt[1])) {
         if (!run) { kept.push(run = []); if (i > 0) run.push(edge(pt, piece[i - 1])); }
         run.push(pt);
       } else {
@@ -94,12 +95,16 @@ for (const e of osm) {
   const base = t.highway.replace(/_link$/, ''), link = t.highway.endsWith('_link');
   if (!DRIVE[base] && !WALK[base]) continue;
   // roads stop at the edge of the map
-  for (const pts of clipLine(ring(e.geometry, true).pts)) {
+  // (the expressway is kept through the box where it alone is mapped)
+  const express = /^(trunk|motorway)$/.test(base);
+  const underground = t.tunnel && t.tunnel !== 'no';
+  for (const pts of clipLine(ring(e.geometry, true).pts, express && !underground ? (x, z) => mapped(x, z) || onExpressway(x, z) : mapped)) {
     const road = { k: t.highway, n: t.name || '', p: flat(pts), len: r2(length(pts)) };
     if (t.bridge && t.bridge !== 'no') road.br = Number(t.layer) || 1;
     if (t.tunnel && t.tunnel !== 'no') road.tn = 1;
     // a bridge the game builds and lets you drive over; the elevated expressway at the edge of the map is only drawn
-    if (road.br && DRIVE[base] && !/^(trunk|motorway|service)$/.test(base)) road.dk = 1;
+    // (an expressway's only inside the box where it is mapped: the motorway bridges elsewhere are just drawn)
+    if (road.br && DRIVE[base] && base !== 'service' && (!express || onExpressway(pts[0][0], pts[0][1]) || onExpressway(pts.at(-1)[0], pts.at(-1)[1]))) road.dk = 1;
     if (DRIVE[base]) {
       const [perDir, laneW] = DRIVE[base];
       const oneway = t.oneway === 'yes' || t.junction === 'roundabout';

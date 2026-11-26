@@ -12,7 +12,7 @@ const KEY = process.env.VWORLD_KEY;
 if (!KEY) { console.error('Set VWORLD_KEY to a V-World API key (https://www.vworld.kr).'); process.exit(1); }
 const RAW = new URL('../data/raw/', import.meta.url);
 const [south, west, north, east] = bbox(REGION, 60);
-const COLS = 24, ROWS = 24, SIZE = 1000;         // the area is asked for in pieces: one request returns at most 1000 buildings
+const COLS = 31, ROWS = 29, SIZE = 1000;         // the area is asked for in pieces: one request returns at most 1000 buildings
 const { toLocal } = projection();
 
 async function page(box, n) {
@@ -31,13 +31,20 @@ async function page(box, n) {
   }
 }
 
+// `--add` keeps what was fetched before and only asks for the pieces round the expressway's landings
+const adding = process.argv.includes('--add');
 const seen = new Map();
+if (adding) {
+  const { readFile } = await import('node:fs/promises');
+  for (const b of JSON.parse(await readFile(new URL('vworld-buildings.json', RAW), 'utf8')).buildings) seen.set(`${b.g[0][0][0].toFixed(7)},${b.g[0][0][1].toFixed(7)},${b.p.archarea}`, b);
+}
 for (let j = 0; j < ROWS; j++) {
   for (let i = 0; i < COLS; i++) {
     const box = [west + (east - west) * i / COLS, south + (north - south) * j / ROWS, west + (east - west) * (i + 1) / COLS, south + (north - south) * (j + 1) / ROWS].map(v => v.toFixed(6));
     // only the pieces that touch a mapped part: the rest of the rectangle has no buildings in the game
     const [mx, mz] = toLocal((Number(box[1]) + Number(box[3])) / 2, (Number(box[0]) + Number(box[2])) / 2);
     if (!mapped(mx, mz, REGION, 320)) continue;
+    if (adding && !REGION.landings.some(l => mx > l.x0 - 320 && mx < l.x1 + 320 && mz > l.z0 - 320 && mz < l.z1 + 320)) continue;
     let count = 0;
     for (let n = 1, pages = 1; n <= pages; n++) {
       const got = await page(box, n);

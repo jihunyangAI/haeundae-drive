@@ -3,12 +3,12 @@
 
 export const REGION = {
   id: 'haeundae',
-  name: '부산 해운대 · 달맞이길 · 송정 · 기장 해안',
+  name: '부산 해운대 · 광안대교 · 달맞이길 · 송정 · 기장 해안',
   lat: 35.158,
   lon: 129.144,
   // The rectangle the map covers, in local metres. The ground is known all over it; streets and buildings
   // are only mapped in the parts below.
-  x0: -700, x1: 8900, z0: -8300, z1: 900,
+  x0: -3500, x1: 8900, z0: -8300, z1: 3300,
   zone: 400,     // the map is cut into square zones this size, loaded as the car comes near
   // The town: Marine City in the west, Haeundae beach, Dalmaji hill in the east.
   core: { x0: -700, x1: 4500, z0: -1100, z1: 900 },
@@ -17,6 +17,12 @@ export const REGION = {
   coast: [[35.1640, 129.1930], [35.1730, 129.1975], [35.1790, 129.2000], [35.1850, 129.2060], [35.1855, 129.2150],
     [35.1900, 129.2225], [35.1990, 129.2270], [35.2140, 129.2265], [35.2240, 129.2290]],
   coastHalf: 800,
+  // The Gwangan expressway: from its ramps north-west of Marine City, over the bay on the Gwangan bridge,
+  // to where it comes down in Namcheon-dong. In this box only the expressway itself is mapped...
+  // (its tunnels, and the other expressway further west, are left out)
+  expressway: { x0: -3050, x1: -250, z0: -1400, z1: 2950 },
+  // ...and at its two ends a few streets, so that there is a way on and a way to turn round.
+  landings: [{ x0: -3400, x1: -2700, z0: 2250, z1: 2950 }, { x0: -700, x1: -250, z0: -1400, z1: -1100 }],
 };
 
 const rad = d => d * Math.PI / 180;
@@ -45,8 +51,7 @@ export const tileY = (lat, z) => (1 - Math.asinh(Math.tan(rad(lat))) / Math.PI) 
 
 // Is the point (local metres) in a part of the map that has streets and buildings?
 export function mapped(x, z, region = REGION, pad = 0) {
-  const c = region.core;
-  if (x >= c.x0 - pad && x <= c.x1 + pad && z >= c.z0 - pad && z <= c.z1 + pad) return true;
+  for (const c of [region.core, ...region.landings]) if (x >= c.x0 - pad && x <= c.x1 + pad && z >= c.z0 - pad && z <= c.z1 + pad) return true;
   const { toLocal } = projection(region), line = region.coast.map(([lat, lon]) => toLocal(lat, lon));
   for (let i = 1; i < line.length; i++) {
     const [ax, az] = line[i - 1], dx = line[i][0] - ax, dz = line[i][1] - az;
@@ -62,9 +67,16 @@ export function boxes(region = REGION, pad = 0) {
   const { toGeo, toLocal } = projection(region), out = [], c = region.core;
   const box = (x0, z0, x1, z1) => { const [north, west] = toGeo(x0 - pad, z0 - pad), [south, east] = toGeo(x1 + pad, z1 + pad); out.push([south, west, north, east]); };
   box(c.x0, c.z0, c.x1, c.z1);
+  for (const l of region.landings) box(l.x0, l.z0, l.x1, l.z1);
   const line = region.coast.map(([lat, lon]) => toLocal(lat, lon)), h = region.coastHalf;
   for (let i = 1; i < line.length; i++) {
     box(Math.min(line[i - 1][0], line[i][0]) - h, Math.min(line[i - 1][1], line[i][1]) - h, Math.max(line[i - 1][0], line[i][0]) + h, Math.max(line[i - 1][1], line[i][1]) + h);
   }
   return out;
+}
+
+// Is the point where the expressway alone is mapped (see REGION.expressway)?
+export function onExpressway(x, z, region = REGION) {
+  const e = region.expressway;
+  return x >= e.x0 && x <= e.x1 && z >= e.z0 && z <= e.z1;
 }

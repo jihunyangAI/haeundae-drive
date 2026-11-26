@@ -272,6 +272,13 @@ export function buildLaneGraph(map, net) {
           if (e.turn === 'L') target = Math.min(rank, m - 1);
           else if (e.turn === 'R') target = m - 1 - Math.min(users.length - 1 - rank, m - 1);
           else target = Math.min(m - 1, Math.max(0, from.index - (n - m > 0 && users[0].index > 0 ? users[0].index : 0)));
+          // On the expressway roads join at a fine angle, from one side: a lane carries on into the lane that
+          // lies nearest ahead of it, so that a ramp runs into the outside lane and not across the carriageway.
+          if (e.turn === 'S' && (arm.road.dk || e.arm.road.dk)) {
+            const end = from.pts.at(-1);
+            let nearest = Infinity;
+            e.arm.exits.forEach((lane, i) => { const d = Math.hypot(lane.pts[0][0] - end[0], lane.pts[0][1] - end[1]); if (d < nearest) { nearest = d; target = i; } });
+          }
           connect(j, arm, from, e.arm.exits[target], e.turn);
         });
       });
@@ -282,8 +289,10 @@ export function buildLaneGraph(map, net) {
         const m = j.moves[a], o = j.moves[b];
         if (m.from === o.from) continue;
         // side by side from one road into different lanes: in each other's way only if the two curves all but touch
-        if (m.arm === o.arm && m.to !== o.to) { if (tooClose(m.pts, o.pts, 1.5)) { m.conflicts.push(o); o.conflicts.push(m); } continue; }
-        if (m.to === o.to || tooClose(m.pts, o.pts, 1.5)) { m.conflicts.push(o); o.conflicts.push(m); }
+        if (m.arm === o.arm && m.to !== o.to) { if (tooClose(m.pts, o.pts, m.arm.road.dk ? 2.4 : 1.5)) { m.conflicts.push(o); o.conflicts.push(m); m.squeeze = o.squeeze = !!m.arm.road.dk; } continue; }   // squeeze: lanes of one road closing in on each other (the expressway dropping a lane)
+        // (where two carriageways of the expressway run together their lanes close in on each other at a
+        // fine angle, side by side for a long way: there, lines nearer than a car is wide are in each other's way)
+        if (m.to === o.to || tooClose(m.pts, o.pts, m.arm.road.dk || o.arm.road.dk ? 2.9 : 1.5)) { m.conflicts.push(o); o.conflicts.push(m); }
         // a bus swings wide of its line: the movements it would brush as well
         if (m.to === o.to || tooClose(m.pts, o.pts, 3.2)) { m.wide.push(o); o.wide.push(m); }
       }
@@ -306,7 +315,8 @@ export function buildLaneGraph(map, net) {
 
     // Lights where through streets cross - but not where the plan comes out as a single stage (a road
     // dividing into two carriageways, say), which would only stop traffic for nothing.
-    const plan = !j.knot && j.arms.filter(a => SIGNALISED.test(a.road.k)).length >= 3 && j.arms.filter(a => a.entries.length).length >= 2 ? programme(j) : null;
+    // (and never up on the decks of the expressway, where roads only part and merge)
+    const plan = !j.knot && !j.arms.some(a => a.road.dk) && j.arms.filter(a => SIGNALISED.test(a.road.k)).length >= 3 && j.arms.filter(a => a.entries.length).length >= 2 ? programme(j) : null;
     if (plan && plan.stages.length >= 2) {
       j.control = 'signal';
       j.signal = plan;
@@ -319,7 +329,10 @@ export function buildLaneGraph(map, net) {
       // Where a one-way street carries straight on (a roundabout ring, a slip road being joined), it goes first.
       const flows = equal ? j.arms.filter(a => a.road.ow && a.entries.some(l => l.out.some(m => m.turn === 'S' && m.to.road.ow))) : [];
       for (const arm of j.arms) arm.give = flows.length === 1 ? (arm === flows[0] ? 'none' : 'stop') : equal ? 'equal' : arm.rank === top ? 'none' : 'stop';
-      for (const m of j.moves) m.priority = m.arm.give === 'stop' ? 1 : m.arm.give === 'equal' ? 1.5 : m.turn === 'L' ? 2 : 3;
+      // Up on the expressway roads only part and join: nobody stops or crawls there. A ramp gives way as it
+      // merges ('merge': it waits for a gap only if there is none), and the carriageway runs through.
+      if (j.arms.some(a => a.road.dk)) for (const arm of j.arms) arm.give = arm.rank === top && mains.length === 1 ? 'none' : 'merge';
+      for (const m of j.moves) m.priority = m.arm.give === 'stop' ? 1 : m.arm.give === 'equal' || m.arm.give === 'merge' ? 1.5 : m.turn === 'L' ? 2 : 3;
     }
   }
 
