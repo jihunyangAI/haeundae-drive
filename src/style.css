@@ -36,8 +36,9 @@ h1, h2, p { margin: 0; }
 
 .panel {
   width: min(1120px, 100%); margin: 0 auto;
-  background: var(--panel); backdrop-filter: blur(14px);
-  border: 1px solid var(--line); border-radius: 16px;
+  /* see-through enough that the car chosen shows behind it; the text keeps a shadow to stay readable */
+  background: rgba(13, 15, 18, 0.26); backdrop-filter: none;
+  border: 1px solid var(--line); border-radius: 16px; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75);
   padding: 18px 20px; display: grid; gap: 16px;
 }
 .group h2 {
