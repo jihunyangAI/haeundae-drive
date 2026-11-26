@@ -49,11 +49,29 @@ const EXTRA = {
     windows: [['nose', { x: [0, 0.93], y: [0.42, 0.9] }], ['tail', { x: [0, 0.8], y: [0.6, 0.86] }]],
   },
 };
+// A car of the player's range made longer or shorter, lower or taller: its outline is stretched to fit.
+function stretched(id, { L, W, H, wheelR }) {
+  const b = car(id), s = b.shape, kz = L / b.L, ky = H / b.H, along = v => v * kz, point = ([z, y]) => [z * kz, b.gc + (y - b.gc) * ky];
+  return {
+    L, W, gc: b.gc, wheelR: wheelR ?? b.wheelR, axles: axlesOf({ wheelbase: b.wheelbase * kz }), tyre: b.wheel.width,
+    shape: { ...s, top: s.top.map(point), belt: s.belt.map(point), glass: { front: s.glass.front.map(along), rear: s.glass.rear.map(along), side: s.glass.side.map(along) }, pillars: s.pillars.map(along) },
+  };
+}
+EXTRA.compact = stretched('hatch', { L: 3.6, W: 1.6, H: 1.58, wheelR: 0.28 });
+EXTRA.crossover = stretched('suv', { L: 4.4, W: 1.85, H: 1.6, wheelR: 0.35 });
+// the one-tonne truck with a box body in place of the open bed
+EXTRA.boxtruck = { ...EXTRA.truck, boxes: [[1.74, 1.85, 3.35, 0, 1.9, -0.82, 0xe6e8ea], [1.6, 0.1, 3.2, 0, 0.92, -0.82, 0x2a2d31]] };
+// a scooter and its rider, with a delivery box behind: put together from blocks (it has no shell)
+EXTRA.scooter = { L: 1.9, W: 0.75, wheelR: 0.24, blocks: true };
 const body = id => (EXTRA[id] ? EXTRA[id] : { ...car(id === 'taxi' ? 'sedan' : id), axles: axlesOf(car(id === 'taxi' ? 'sedan' : id)), tyre: car(id === 'taxi' ? 'sedan' : id).wheel.width });
 
 // Paint colours seen on Korean streets, the common ones several times over.
-const PAINTS = [0xd9dbd6, 0xd9dbd6, 0xd9dbd6, 0xe9e9e6, 0xb3b8be, 0xb3b8be, 0x8a9097, 0x1b1d21, 0x1b1d21, 0x2b3038, 0x1d4e9e, 0x9a1c22, 0x5f7385, 0x6b5a45];
-const FLEET = { taxi: [0xd9dbd6, 0xb3b8be, 0xe07b1a], bus: [0x1f5fa8, 0x2f8f4e, 0x1f5fa8], truck: [0xdfe2e4, 0x2459a6, 0xdfe2e4] };
+const PAINTS = [0xd9dbd6, 0xd9dbd6, 0xd9dbd6, 0xe9e9e6, 0xe9e9e6, 0xb3b8be, 0xb3b8be, 0x8a9097, 0x8a9097, 0x1b1d21, 0x1b1d21, 0x1b1d21, 0x2b3038, 0x3c4149, 0x1d4e9e, 0x16305c, 0x9a1c22, 0x6e1620, 0x5f7385, 0x9db7c9, 0x6b5a45, 0xb7a98c, 0x2f4a3a, 0xc8691f];
+const FLEET = {
+  taxi: [0xd9dbd6, 0xb3b8be, 0xe07b1a, 0x1b1d21], bus: [0x1f5fa8, 0x2f8f4e, 0x1f5fa8, 0xb3202a], truck: [0xdfe2e4, 0x2459a6, 0xdfe2e4],
+  boxtruck: [0xdfe2e4, 0xdfe2e4, 0x2459a6, 0xe9c21c], scooter: [0xc8102e, 0xe9e9e6, 0x1b1d21, 0x2a9d8f, 0xe07b1a],
+  compact: [0xd9dbd6, 0xe9e9e6, 0xb3b8be, 0xd8c7a0, 0x9db7c9, 0xe58fa0, 0xc8102e, 0x7fb069, 0x1b1d21],
+};
 export const paintOf = (kind, tint) => { const list = FLEET[kind] || PAINTS; return list[Math.floor(tint * list.length) % list.length]; };
 const LAMP = { head: 0x9aa2aa, tail: 0x7a1014, left: 0x9a5f14, right: 0x9a5f14 };      // lens colours, unlit
 const PARTS = ['other', 'paint', 'head', 'tail', 'left', 'right'];
@@ -77,7 +95,43 @@ function tinted(geo, hex) {
 const MOVING = { step: 0.3, arch: 5, sub: 2, cap: 5, patch: [6, 1], wheel: 12 };
 const STANDING = { step: 0.6, arch: 3, sub: 1, cap: 3, patch: [3, 1], wheel: 8 };
 
+// paint: the fairing and the delivery box take the colour; the rider and the machine do not.
+function buildScooter(id, detail) {
+  const R = 0.24, others = [], loose = g => { const n = g.toNonIndexed(); n.deleteAttribute('uv'); return n; };
+  const box = (w, h, d, x, y, z) => new THREE.BoxGeometry(w, h, d).translate(x, y, z);
+  const dark = (g, hex = 0x17191c) => others.push(tinted(g, hex));
+  for (const z of [-0.62, 0.62]) dark(new THREE.CylinderGeometry(R, R, 0.11, detail.wheel).rotateZ(Math.PI / 2).translate(0, R, z), 0x0e0f11);
+  dark(box(0.22, 0.2, 1.05, 0, 0.42, 0));                               // the frame and the engine
+  dark(box(0.3, 0.09, 0.62, 0, 0.78, -0.25), 0x24262a);                 // the seat
+  dark(box(0.05, 0.5, 0.05, 0, 0.82, 0.55), 0x24262a);                  // the steering column
+  dark(box(0.56, 0.04, 0.05, 0, 1.06, 0.5), 0x24262a);                  // the handlebar
+  // the rider: legs, body, arms to the bars, a helmet
+  for (const side of [-1, 1]) {
+    dark(box(0.13, 0.14, 0.5, side * 0.15, 0.82, 0.02), 0x2c3340);
+    dark(box(0.12, 0.42, 0.13, side * 0.16, 0.58, 0.24), 0x2c3340);
+    dark(box(0.09, 0.09, 0.46, side * 0.22, 1.2, 0.28), 0x39424f);
+  }
+  dark(box(0.4, 0.56, 0.24, 0, 1.2, -0.08), 0x39424f);
+  dark(new THREE.SphereGeometry(0.14, 10, 8).translate(0, 1.62, -0.02), 0xdfe2e5);
+  dark(box(0.2, 0.08, 0.02, 0, 1.63, 0.12), 0x0d1319);                  // the visor
+  const paint = mergeGeometries([box(0.36, 0.5, 0.2, 0, 0.72, 0.58), box(0.3, 0.1, 0.5, 0, 0.5, 0.75), box(0.46, 0.44, 0.44, 0, 1.06, -0.72)].map(loose));
+  const geometry = {
+    paint, other: mergeGeometries(others),
+    head: loose(box(0.14, 0.09, 0.03, 0, 0.93, 0.69)), tail: loose(box(0.16, 0.06, 0.03, 0, 0.72, -0.95)),
+    left: mergeGeometries([box(0.05, 0.05, 0.03, 0.2, 0.9, 0.66), box(0.05, 0.05, 0.03, 0.2, 0.7, -0.93)].map(loose)),
+    right: mergeGeometries([box(0.05, 0.05, 0.03, -0.2, 0.9, 0.66), box(0.05, 0.05, 0.03, -0.2, 0.7, -0.93)].map(loose)),
+  };
+  return { id, geometry, whole: wholeOf(geometry) };
+}
+// The whole car as one mesh for the moving traffic. `part` says what each corner belongs to: 0 fixed
+// colour, 1 paint, 2 headlamps, 3 tail lamps, 4 left and 5 right turn signals.
+const wholeOf = geometry => mergeGeometries(PARTS.map((name, k) => {
+  const g = name === 'other' ? geometry.other.clone() : tinted(geometry[name].clone(), name === 'paint' ? 0xffffff : LAMP[name]);
+  g.setAttribute('part', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count).fill(k), 1));
+  return g;
+}));
 function buildKind(id, detail) {
+  if (body(id).blocks) return buildScooter(id, detail);
   const spec = body(id), s = spec.shape, R = spec.wheelR, W = spec.W;
   const shell = buildShell(spec, spec.axles.map(z => ({ z, y: R, r: R + 0.07 })), detail);
   const paint = part(shell.geometry, PAINT);
@@ -110,14 +164,7 @@ function buildKind(id, detail) {
   };
   const geometry = { paint, other: mergeGeometries(others) };
   for (const [name, list] of Object.entries(lamps)) geometry[name] = mergeGeometries(list);
-  // The whole car as one mesh for the moving traffic. `part` says what each corner belongs to: 0 fixed
-  // colour, 1 paint, 2 headlamps, 3 tail lamps, 4 left and 5 right turn signals.
-  const whole = mergeGeometries(PARTS.map((name, k) => {
-    const g = name === 'other' ? geometry.other.clone() : tinted(geometry[name].clone(), name === 'paint' ? 0xffffff : LAMP[name]);
-    g.setAttribute('part', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count).fill(k), 1));
-    return g;
-  }));
-  return { id, geometry, whole };
+  return { id, geometry, whole: wholeOf(geometry) };
 }
 
 // Geometry and materials shared by the moving traffic and the parked cars.

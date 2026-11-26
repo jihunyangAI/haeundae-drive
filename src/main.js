@@ -58,7 +58,7 @@ const people = createPeople(world.walks, { signalOf: world.signalAt });
 const peopleView = createPeopleView(scene, (x, z, p) => world.heightFor(p?.edge?.road)(x, z), `${BASE}people/`);
 let peopleFilled = false, brakeForPeople = 0;
 const stopping = { show: 0, horn: 0, quiet: 0 };       // the warning while the car stops itself for someone: seconds left of each
-const TRAFFIC = [['none', '없음', 0], ['light', '적음', 0.5], ['normal', '보통', 1]];
+const TRAFFIC = [['none', '없음', 0], ['light', '적음', 0.5], ['normal', '보통', 1], ['heavy', '많음', 1.5]];
 let trafficLevel = 'normal', trafficFilled = false;
 const frustum = new THREE.Frustum(), viewMatrix = new THREE.Matrix4(), probe = new THREE.Sphere(new THREE.Vector3(), 7);
 // cars appear and disappear where the camera is not looking
@@ -172,9 +172,9 @@ let tunnel = false;                      // radio reception drops while the car 
 // Three levels. "auto" picks one from the graphics chip and steps down if the frame rate stays low.
 const QUALITY = {
   // mirrors: width of the picture the car's mirrors show, and how many frames pass between redraws
-  low: { name: '낮음', pixels: 1, shadows: 0, particles: 0.5, bloom: false, lampLights: 0, reflections: false, mirrors: null, traffic: 8, people: 25 },
-  medium: { name: '보통', pixels: 1.5, shadows: 2048, particles: 0.75, bloom: true, lampLights: 4, reflections: false, mirrors: { width: 320, every: 4 }, traffic: 20, people: 110 },
-  high: { name: '높음', pixels: 2, shadows: 4096, particles: 1, bloom: true, lampLights: 6, reflections: true, mirrors: { width: 640, every: 2 }, traffic: 40, people: 150 },
+  low: { name: '낮음', pixels: 1, shadows: 0, particles: 0.5, bloom: false, lampLights: 0, reflections: false, mirrors: null, traffic: 14, people: 25 },
+  medium: { name: '보통', pixels: 1.5, shadows: 2048, particles: 0.75, bloom: true, lampLights: 4, reflections: false, mirrors: { width: 320, every: 4 }, traffic: 34, people: 110 },
+  high: { name: '높음', pixels: 2, shadows: 4096, particles: 1, bloom: true, lampLights: 6, reflections: true, mirrors: { width: 640, every: 2 }, traffic: 56, people: 150 },
 };
 const ORDER = ['low', 'medium', 'high'];
 function guessQuality() {

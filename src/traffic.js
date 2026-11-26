@@ -6,10 +6,13 @@ import { limitOf } from './map/network.js';
 
 // What drives around. len, wid in metres; weight: how common; major: only on through streets.
 export const KINDS = [
-  { id: 'sedan', len: 4.7, wid: 1.84, weight: 30 }, { id: 'hatch', len: 3.95, wid: 1.74, weight: 22 },
-  { id: 'suv', len: 4.75, wid: 1.93, weight: 22 }, { id: 'taxi', len: 4.7, wid: 1.84, weight: 9 },
-  { id: 'van', len: 5.2, wid: 1.95, weight: 6 }, { id: 'truck', len: 5.1, wid: 1.76, weight: 6 },
+  { id: 'sedan', len: 4.7, wid: 1.84, weight: 24 }, { id: 'hatch', len: 3.95, wid: 1.74, weight: 12 },
+  { id: 'suv', len: 4.75, wid: 1.93, weight: 18 }, { id: 'taxi', len: 4.7, wid: 1.84, weight: 9 },
+  { id: 'van', len: 5.2, wid: 1.95, weight: 5 }, { id: 'truck', len: 5.1, wid: 1.76, weight: 5 },
   { id: 'bus', len: 10.8, wid: 2.48, weight: 4, major: true }, { id: 'sport', len: 4.45, wid: 1.9, weight: 1 },
+  // a light car, a crossover, a box van on a one-tonne truck, and the delivery scooters that are everywhere
+  { id: 'compact', len: 3.6, wid: 1.6, weight: 10 }, { id: 'crossover', len: 4.4, wid: 1.85, weight: 14 },
+  { id: 'boxtruck', len: 5.1, wid: 1.76, weight: 6 }, { id: 'scooter', len: 1.9, wid: 0.75, weight: 7 },
 ];
 
 const ACCEL = 1.7, BRAKE = 2.4, HARD = 3.2;    // m/s²: pulling away, easy braking, the most a driver brakes for amber

@@ -551,7 +551,7 @@ export function buildStreets(ctx, zone) {
 
   // ---------- parked cars ----------
   // Beside the access roads and car park aisles, clear of buildings and of every other carriageway.
-  const parked = [], PARKED = ['sedan', 'hatch', 'suv', 'sedan', 'hatch', 'suv', 'van'];
+  const parked = [], PARKED = ['sedan', 'hatch', 'suv', 'sedan', 'crossover', 'suv', 'van', 'compact', 'crossover', 'compact', 'boxtruck'];
   for (const road of zone.roads) {
     if (road.c !== 'drive' || road.k !== 'service' || road.br || road.tn || road.len < 14) continue;
     const p = road.p;
