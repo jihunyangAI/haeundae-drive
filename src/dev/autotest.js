@@ -11,7 +11,8 @@ export function autoRun(g, { from, to = null, limit = 900, traffic = 'normal' } 
     const a = place(from), b = to && place(to), far = l => Math.hypot(l.pts[0][0] - a.x, l.pts[0][1] - a.z);
     const lane = g.world.lanes.lanes.filter(l => far(l) < 400 && l.len > 20 && !l.level).sort((p, q) => far(p) - far(q)).find(l => !b || g.autodrive.route(l, b.x, b.z));
     if (!lane) return { err: 'no lane at start' };
-    const p0 = lane.pts[0], p1 = lane.pts[1];
+    // (set down part way along the lane, not in the mouth of the junction it starts at, where other cars turn in)
+    const k = Math.max(0, Math.min(lane.pts.length - 2, Math.floor(lane.pts.length / 2) - 1)), p0 = lane.pts[k], p1 = lane.pts[k + 1];
     car.reset(p0[0], p0[1], Math.atan2(p1[0] - p0[0], p1[1] - p0[1]));
     car.y = g.world.surface(p0[0], p0[1]);
   }
