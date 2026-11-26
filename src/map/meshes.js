@@ -157,10 +157,11 @@ export function buildWaterfront(zone, hAt) {
     ribbonMesh(of(['coast'], 2), 0xffffff, () => 0.7, 1, { owns }),
     ribbonMesh(of(['river'], 8).concat(of(['stream'], 3)), 0x4f86b0, (x, z) => hAt(x, z) + 0.2, 1, { owns }),
     ribbonMesh(of(['pier'], 3), 0x8d8a82, () => 1.2, 1, { owns }),
+    ribbonMesh(of(['breakwater'], 9), 0x9a9890, () => 1.9, 1, { owns }),
   );
   // a pier is drawn by the zone that holds its middle
   const middle = p => { let x = 0, z = 0; for (let i = 0; i < p.length; i += 2) { x += p[i]; z += p[i + 1]; } return [x / (p.length / 2), z / (p.length / 2)]; };
-  const piers = zone.areas.filter(a => a.k === 'pier' && owns(...middle(a.p))).map(a => {
+  const piers = zone.areas.filter(a => (a.k === 'pier' || a.k === 'breakwater') && owns(...middle(a.p))).map(a => {
     const shape = new THREE.Shape();
     for (let i = 0; i < a.p.length; i += 2) {
       if (i === 0) shape.moveTo(a.p[0], -a.p[1]); else shape.lineTo(a.p[i], -a.p[i + 1]);

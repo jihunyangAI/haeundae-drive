@@ -162,6 +162,55 @@ const STYLES = {
       g.fillRect(S * 0.49, S * 0.22, 5, S * 0.5);
     },
   },
+  // Village houses along the coast: plastered walls with a window to each bay, and on one kind a door.
+  house0: {
+    w: 4.2, h: 3, material: { roughness: 0.92 }, lit: 0.3,
+    glass(g, S) { g.fillRect(S * 0.3, S * 0.3, S * 0.4, S * 0.34); },
+    paint(g, S) {
+      g.fillStyle = '#ece8df';
+      g.fillRect(0, 0, S, S);
+      g.fillStyle = '#d9d4c8';
+      g.fillRect(0, S * 0.9, S, S * 0.1);                    // the foot of the wall, darker
+      g.fillStyle = '#f6f4ee';
+      g.fillRect(S * 0.3 - 6, S * 0.3 - 6, S * 0.4 + 12, S * 0.34 + 12);
+      g.fillStyle = '#4c6276';
+      g.fillRect(S * 0.3, S * 0.3, S * 0.4, S * 0.34);
+      g.fillStyle = '#f6f4ee';
+      g.fillRect(S * 0.5 - 2, S * 0.3, 4, S * 0.34);
+    },
+  },
+  house1: {                                                 // a door and a small window
+    w: 4.6, h: 3, material: { roughness: 0.92 }, lit: 0.25,
+    glass(g, S) { g.fillRect(S * 0.12, S * 0.32, S * 0.26, S * 0.26); },
+    paint(g, S) {
+      g.fillStyle = '#e4ddd0';
+      g.fillRect(0, 0, S, S);
+      g.fillStyle = '#cfc8ba';
+      g.fillRect(0, S * 0.9, S, S * 0.1);
+      g.fillStyle = '#51677a';
+      g.fillRect(S * 0.12, S * 0.32, S * 0.26, S * 0.26);
+      g.fillStyle = '#7b6a55';
+      g.fillRect(S * 0.6, S * 0.3, S * 0.2, S * 0.7);          // the door
+      g.fillStyle = '#5f5242';
+      g.fillRect(S * 0.6, S * 0.3, S * 0.2, 5);
+      g.fillRect(S * 0.7 - 1, S * 0.3, 3, S * 0.7);
+    },
+  },
+  house2: {                                                 // a wide sliding window, as on a room facing the yard
+    w: 5, h: 3, material: { roughness: 0.92 }, lit: 0.3,
+    glass(g, S) { g.fillRect(S * 0.16, S * 0.26, S * 0.68, S * 0.5); },
+    paint(g, S) {
+      g.fillStyle = '#dfe6ea';
+      g.fillRect(0, 0, S, S);
+      g.fillStyle = '#c5ced4';
+      g.fillRect(0, S * 0.88, S, S * 0.12);
+      g.fillStyle = '#48606f';
+      g.fillRect(S * 0.16, S * 0.26, S * 0.68, S * 0.5);
+      g.fillStyle = '#eef2f4';
+      for (const x of [0.16, 0.38, 0.6, 0.82]) g.fillRect(S * x, S * 0.26, 5, S * 0.5);
+      g.fillRect(S * 0.16, S * 0.26, S * 0.68, 5);
+    },
+  },
   // the ground floor of shops and offices: two bays, one a shop window and one with the door
   store: {
     w: 8, h: 4, material: { roughness: 0.35, metalness: 0.2 }, lit: 0.6,
@@ -187,13 +236,15 @@ const STYLES = {
     },
   },
 };
-const VARIANTS = { tower: 2, apartment: 2, shop: 3, office: 2, civic: 1 };
+const VARIANTS = { tower: 2, apartment: 2, shop: 3, office: 2, civic: 1, house: 3 };
+// roofs of village houses: the blue, orange and green sheeting of a fishing village, and plain tile
+const ROOFS = [0x3a6da6, 0x2f5c8e, 0x3a6da6, 0xc4623a, 0xb9552f, 0x4b8a66, 0x8a8d91, 0x6f7479, 0x7c4636, 0x9c3b33];
 // what the paint of one building does to its wall picture: mostly near white, sometimes warm or cool
 const TINTS = [[1, 1, 1], [1, 1, 1], [1.0, 0.97, 0.91], [0.93, 0.96, 1.0], [0.97, 0.93, 0.87], [0.88, 0.9, 0.92], [1.0, 0.95, 0.95], [0.94, 0.98, 0.93]];
 const AWNINGS = [0x9c2b2b, 0x1f5a3c, 0x23395b, 0xc9a227, 0x6b6f75, 0x7a4a2a, 0xd9d4c8];
 
 function styleOf(b, pick) {
-  const kind = b.h >= 100 ? 'tower' : b.t === 'apartments' || b.t === 'residential' ? 'apartment'
+  const kind = b.c ? 'house' : b.h >= 100 ? 'tower' : b.t === 'apartments' || b.t === 'residential' ? 'apartment'
     : ['school', 'kindergarten', 'public', 'university', 'hospital'].includes(b.t) ? 'civic' : b.h > 40 || b.t === 'office' || b.t === 'hotel' ? 'office' : 'shop';
   return kind + Math.floor(pick * VARIANTS[kind]) % VARIANTS[kind];
 }
@@ -346,6 +397,30 @@ export function buildFacades(buildings, ground, kit, seed = 0) {
     if (!edges.length) return;
     const inside = pointInPolygon(cx, cz, b.p);
 
+    if (b.c) {
+      // A village house: plain walls from the ground to the eaves, and a roof rising from the eaves to a
+      // point over the middle, in the colour of its sheeting. No shop front, no sign, nothing on the roof.
+      const storeys = Math.min(3, Math.max(1, Math.round(b.h / 3))), each = b.h / storeys, eaves = top, over = 0.45;
+      const rise = Math.min(2.4, 0.8 + Math.sqrt(size) * 0.09), roofHex = ROOFS[Math.floor(own() * ROOFS.length)];
+      // The roof can rise to one point only if every wall can be seen from under it; an L-shaped house keeps a flat roof.
+      const hip = inside && edges.every(e => (cx - e.ax) * e.nx + (cz - e.az) * e.nz < -0.05);
+      // the corners of the eaves: each wall's corner pushed out along both walls that meet there, so the slopes join
+      const count = edges.length, eave = edges.map((e, i) => {
+        const before = edges[(i + count - 1) % count], k = over / Math.max(0.35, 1 + before.nx * e.nx + before.nz * e.nz);
+        return [e.ax + (before.nx + e.nx) * k, eaves - 0.12, e.az + (before.nz + e.nz) * k];
+      });
+      edges.forEach((e, i) => {
+        wall(key, e, base, eaves, Math.max(1, Math.round(e.len / bayW)), (base - street) / each, storeys, colour, sign);
+        if (!hip) return;
+        const a = eave[i], c = eave[(i + 1) % count];
+        // one slope of the roof, from the overhanging eaves up to the peak
+        tone.setHex(roofHex).multiplyScalar(shade);
+        for (const p of [a, c, [cx, eaves + rise, cz]]) { plain.pos.push(p[0], p[1], p[2]); plain.col.push(tone.r, tone.g, tone.b); }
+        quad([e.ax, eaves - 0.12, e.az], [e.bx, eaves - 0.12, e.bz], c, a, 0xd8d4ca, shade * 0.9);       // the underside of the eaves
+      });
+      if (!hip) roofOver(b.p, eaves);
+      return;
+    }
     if (!inside) crown = top;                               // an L- or U-shaped tower: no narrower top, it would hang over the gap
     for (const e of edges) {
       const bays = Math.max(1, Math.round(e.len / bayW));

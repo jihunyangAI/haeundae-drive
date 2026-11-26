@@ -6,9 +6,17 @@ import { PLACES } from './stops.js';
 import { pointInPolygon, boundsOf } from './data.js';
 import { QuadBatch, FONT, seeded } from './atlas.js';
 import { snowable } from './shared.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const KERBED = /^(trunk|primary|secondary|tertiary|residential|unclassified|living_street)$/;
 const SIDEWALK_W = 3;
+// The fishing harbours of the coast, [latitude, longitude, how far round the boats lie (m)]: Mipo, Cheongsapo,
+// Gudeokpo, Songjeong, Gongsu, Dongam, Yeonhwa-ri, Daebyeon. Boats are moored along the shore there.
+const HARBOURS = [[35.1583, 129.1702, 90], [35.1608, 129.1912, 110], [35.1741, 129.1968, 80], [35.1813, 129.2046, 90], [35.1851, 129.2143, 110],
+  [35.1908, 129.2238, 110], [35.2150, 129.2262, 150], [35.2238, 129.2296, 220], [35.2265, 129.2318, 160]];
+const HULLS = [0xf2f0ea, 0xf2f0ea, 0x2f6fb5, 0x2a8f86, 0x3d7fc4, 0xd94f3d, 0xe9e4d8].map(c => new THREE.Color(c));
+const BUOYS = [0xf28c28, 0xf28c28, 0xf4f1e8, 0xf2c230].map(c => new THREE.Color(c));
+const CRATES = [0x2f6fb5, 0xf2c230, 0xd94f3d, 0x3f9b6b].map(c => new THREE.Color(c));
 const PARASOLS = [0xd94f3d, 0x2f6fb5, 0xf0c33c, 0x3f9b6b, 0xf2f0ea, 0xe7862e].map(c => new THREE.Color(c));
 export const LAMP_COLOURS = { red: 0xff2a1a, amber: 0xffb000, green: 0x18e07a, arrow: 0x18e07a, walkRed: 0xff2a1a, walkGreen: 0x18e07a, count: 0x18e07a };
 const WIRED = /^(residential|living_street|unclassified)$/;     // streets with overhead lines and speed bumps
@@ -39,6 +47,14 @@ export function createStreetKit(atlas) {
     crown: [new THREE.IcosahedronGeometry(1, 1), snowable(new THREE.MeshStandardMaterial({ roughness: 0.9, flatShading: true }), 0.6)],
   };
   kinds.cover = [new THREE.CylinderGeometry(1, 1, 1, 14), new THREE.MeshStandardMaterial({ color: 0x2c2e31, roughness: 0.55, metalness: 0.6 })];      // manhole covers
+  // harbours: a fishing boat's hull (pointed at the bow, +z) and its wheelhouse, a lighthouse, buoys, fish crates
+  const hull = new THREE.Shape([[-1, -3.2], [1, -3.2], [1.15, 0.6], [0.7, 2.4], [0, 3.6], [-0.7, 2.4], [-1.15, 0.6]].map(p => new THREE.Vector2(p[0], p[1])));
+  kinds.hull = [new THREE.ExtrudeGeometry(hull, { depth: 1, bevelEnabled: false }).rotateX(Math.PI / 2).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ roughness: 0.7 })];
+  kinds.wheelhouse = [mergeGeometries([new THREE.BoxGeometry(1.5, 1.3, 1.7).translate(0, 1.15, -1.6), new THREE.CylinderGeometry(0.04, 0.04, 2.6, 5).translate(0, 2.4, -0.4), new THREE.BoxGeometry(1.9, 0.08, 4.4).translate(0, 0.54, -0.9)]), new THREE.MeshStandardMaterial({ color: 0xf1efe8, roughness: 0.8 })];
+  kinds.lighthouse = [mergeGeometries([new THREE.CylinderGeometry(0.75, 1.15, 8, 12).translate(0, 4, 0), new THREE.CylinderGeometry(1.05, 1.05, 0.25, 12).translate(0, 8.1, 0), new THREE.ConeGeometry(0.8, 0.9, 12).translate(0, 9.7, 0)]), new THREE.MeshStandardMaterial({ roughness: 0.75 })];
+  kinds.lantern = [new THREE.CylinderGeometry(0.55, 0.55, 1.0, 10), lampGlow];
+  kinds.crate = [box, new THREE.MeshStandardMaterial({ roughness: 0.8 })];
+  kinds.buoy = [new THREE.IcosahedronGeometry(1, 0), new THREE.MeshStandardMaterial({ roughness: 0.6 })];
   // beach parasols
   kinds.parasol = [new THREE.ConeGeometry(1, 1, 10), new THREE.MeshStandardMaterial({ roughness: 0.85, side: THREE.DoubleSide })];
   kinds.parasolPole = [cylinder, new THREE.MeshStandardMaterial({ color: 0xe6e6e0, roughness: 0.6 })];
@@ -571,6 +587,92 @@ export function buildStreets(ctx, zone) {
     for (let i = 0; i < tries; i++) {
       const x = x0 + rand() * (x1 - x0), z = z0 + rand() * (z1 - z0);
       if (pointInPolygon(x, z, a.p) && !nearRoad(x, z, 2.5, 'any')) tree(x, z);
+    }
+  }
+
+  // ---------- harbours ----------
+  // Boats lie in the water close under the shore of each fishing harbour and along the piers; the
+  // long breakwaters carry a lighthouse at their seaward end; fish farms are rows of buoys.
+  {
+    const taken = [], WHITE = new THREE.Color(0xf4f2ec), RED = new THREE.Color(0xc73a30);
+    const boat = (x, z, heading, size = 1) => {
+      if (!owns(x, z) || map.isLand(x, z) || taken.some(t => Math.hypot(t[0] - x, t[1] - z) < 6.5 * size)) return false;
+      // room for the whole hull: no land under the bow or the stern
+      const hx = Math.sin(heading) * 3.6 * size, hz = Math.cos(heading) * 3.6 * size;
+      if (map.isLand(x + hx, z + hz) || map.isLand(x - hx, z - hz)) return false;
+      taken.push([x, z]);
+      const trim = (grit() - 0.5) * 0.08;           // a little down by the bow or the stern
+      put('hull', x, 0.1 * size, z, heading, size, size, size, HULLS[Math.floor(grit() * HULLS.length)], undefined, trim);
+      put('wheelhouse', x, 0.1 * size, z, heading, size, size, size, undefined, undefined, trim);
+      return true;
+    };
+    const m = map.meta, local = (lat, lon) => [(lon - m.center.lon) * m.mPerLon, (m.center.lat - lat) * m.mPerLat];
+    for (const [lat, lon, reach] of HARBOURS) {
+      const [hx0, hz0] = local(lat, lon);
+      if (hx0 + reach < zone.x0 || hx0 - reach > zone.x1 || hz0 + reach < zone.z0 || hz0 - reach > zone.z1) continue;
+      // (how many there are is settled by the spacing and by how much shore lies within reach)
+      for (let x = hx0 - reach; x <= hx0 + reach; x += 6.5) {
+        for (let z = hz0 - reach; z <= hz0 + reach; z += 6.5) {
+          if (!owns(x, z) || Math.hypot(x - hx0, z - hz0) > reach || map.isLand(x, z) || grit() < 0.45) continue;
+          // which way the shore is, if it is within a boat's length or two
+          let lx = 0, lz = 0;
+          for (let k = 0; k < 8; k++) { const ux = Math.sin(k * Math.PI / 4), uz = Math.cos(k * Math.PI / 4); if (map.isLand(x + ux * 9, z + uz * 9) || map.isLand(x + ux * 17, z + uz * 17)) { lx += ux; lz += uz; } }
+          if (Math.hypot(lx, lz) < 0.5) continue;
+          // moored alongside: lying across the direction of the land
+          boat(x, z, Math.atan2(-lz, lx) + (grit() < 0.5 ? 0 : Math.PI) + (grit() - 0.5) * 0.3, 0.85 + grit() * 0.5);
+        }
+      }
+      // on the quay: stacks of fish crates
+      for (let k = 0; k < 26; k++) {
+        const a = grit() * 6.283, d = grit() * reach * 0.8, x = hx0 + Math.sin(a) * d, z = hz0 + Math.cos(a) * d;
+        if (!owns(x, z) || !map.isLand(x, z) || inBuilding(x, z) || nearRoad(x, z, 1.5, 'any')) continue;
+        let shore = false;
+        for (let q = 0; q < 8 && !shore; q++) shore = !map.isLand(x + Math.sin(q * Math.PI / 4) * 14, z + Math.cos(q * Math.PI / 4) * 14);
+        if (!shore) continue;
+        const tone = CRATES[Math.floor(grit() * CRATES.length)], turn = grit() * 3.14, high = 1 + Math.floor(grit() * 3);
+        put('crate', x, ctx.ground(x, z) + 0.18 * high, z, turn, 1.1, 0.36 * high, 0.75, tone);
+        posts.push({ x, z, r: 0.55 });
+      }
+    }
+    for (const line of zone.lines) {
+      if (line.k !== 'pier' && line.k !== 'breakwater') continue;
+      const p = line.p, pts = [];
+      for (let i = 0; i < p.length; i += 2) pts.push([p[i], p[i + 1]]);
+      // boats tied up either side of a pier
+      const half = line.k === 'pier' ? 3.4 : 7.5;
+      for (let i = 1; i < pts.length; i++) {
+        const [ax, az] = pts[i - 1], dx = pts[i][0] - ax, dz = pts[i][1] - az, len = Math.hypot(dx, dz);
+        for (let s = 5; s < len - 2; s += 8.5) {
+          if (grit() < 0.45) continue;
+          const side = grit() < 0.5 ? -1 : 1, x = ax + dx / len * s - dz / len * side * half, z = az + dz / len * s + dx / len * side * half;
+          boat(x, z, Math.atan2(dx, dz) + (grit() < 0.5 ? 0 : Math.PI), line.k === 'pier' ? 0.8 + grit() * 0.3 : 1 + grit() * 0.4);
+        }
+      }
+      if (line.k !== 'breakwater') continue;
+      // the lighthouse: on the end with the more open water round it
+      let length = 0;
+      for (let i = 1; i < pts.length; i++) length += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+      if (length < 70) continue;
+      const open = ([x, z]) => { let n = 0; for (let k = 0; k < 12; k++) if (!map.isLand(x + Math.sin(k * Math.PI / 6) * 45, z + Math.cos(k * Math.PI / 6) * 45)) n++; return n; };
+      const end = open(pts[0]) >= open(pts.at(-1)) ? [pts[0], pts[1]] : [pts.at(-1), pts.at(-2)];
+      const back = Math.hypot(end[1][0] - end[0][0], end[1][1] - end[0][1]) || 1, x = end[0][0] + (end[1][0] - end[0][0]) / back * 4, z = end[0][1] + (end[1][1] - end[0][1]) / back * 4;
+      if (!owns(x, z)) continue;
+      put('lighthouse', x, 1.9, z, 0, 1, 1, 1, Math.round(x + z) % 2 ? RED : WHITE);
+      put('lantern', x, 1.9 + 8.75, z, 0, 1, 1, 1);
+      lamps.push({ x, z, y: 1.9 + 1.4 });
+    }
+    // fish farms: lines of buoys across the water
+    let buoys = 0;
+    for (const a of zone.areas) {
+      if (a.k !== 'aqua') continue;
+      const box = boundsOf(a.p), x0 = Math.max(box[0], zone.x0), z0 = Math.max(box[1], zone.z0), x1 = Math.min(box[2], zone.x1), z1 = Math.min(box[3], zone.z1);
+      for (let z = Math.ceil(z0 / 14) * 14; z < z1 && buoys < 700; z += 14) {
+        for (let x = Math.ceil(x0 / 5) * 5; x < x1 && buoys < 700; x += 5) {
+          if (!pointInPolygon(x, z, a.p) || map.isLand(x, z)) continue;
+          put('buoy', x, 0.12, z + Math.sin(x * 0.07) * 1.2, 0, 0.32, 0.32, 0.32, BUOYS[Math.abs(Math.floor(z / 14)) % BUOYS.length]);
+          buoys++;
+        }
+      }
     }
   }
 

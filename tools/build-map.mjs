@@ -154,6 +154,9 @@ if (register) {
       let type = USE[String(tags.usability || '').slice(0, 2)] || 'yes';
       if (type === 'apartments' && floors > 0 && floors < 5) type = 'house';
       const b = { t: type, n: tags.dong_nm || tags.bld_nm || '', p };
+      // out along the coast, a small low building is a village house and is drawn as one
+      const c0 = REGION.core;
+      if (!(cx >= c0.x0 && cx <= c0.x1 && cz >= c0.z0 && cz <= c0.z1) && area < 420 && floors <= 2 && (floors > 0 || area < 200) && !(height > 9) && ['yes', 'house', 'retail'].includes(type)) b.c = 1;
       if (height > 2) Object.assign(b, { h: r2(height), hs: 'h' });
       else if (floors > 0) Object.assign(b, { h: r2(floors * (LEVEL_H[type] || 3.2) + 1), hs: 'lv' });
       // nothing registered: a small footprint is a house or a lock-up, a larger one a low block
@@ -237,11 +240,13 @@ for (const e of osm) {
     : t.natural === 'coastline' ? 'coast'
     : t.natural === 'tree_row' ? 'tree_row'
     : t.man_made === 'pier' ? 'pier'
+    : t.man_made === 'breakwater' ? 'breakwater'
+    : t.landuse === 'aquaculture' ? 'aqua'
     : t.waterway ? t.waterway : null;
   if (!kind) continue;
   const { pts, closed } = ring(e.geometry, true);
   // (woods, the shore and water are kept all over the rectangle, the rest where streets are mapped)
-  if (!pts.some(p => p[0] >= X0 && p[0] <= X1 && p[1] >= Z0 && p[1] <= Z1 && (['wood', 'coast', 'beach', 'water', 'farm'].includes(kind) || mapped(p[0], p[1])))) continue;
+  if (!pts.some(p => p[0] >= X0 && p[0] <= X1 && p[1] >= Z0 && p[1] <= Z1 && (['wood', 'coast', 'beach', 'water', 'farm', 'aqua', 'breakwater', 'pier'].includes(kind) || mapped(p[0], p[1])))) continue;
   const isLine = !closed || ['coast', 'tree_row', 'river', 'stream'].includes(kind);
   (isLine ? lines : areas).push({ k: kind, p: flat(isLine ? pts : pts.slice(0, -1)) });
 }
@@ -527,6 +532,7 @@ const touching = ([ax, az, bx, bz], pad, visit) => {
 };
 for (const b of buildings) {
   const [cx, cz] = centroid(b.p);
+  if (register && !onLand(cx, cz)) continue;              // registered out on a pier or the water: there is no ground for it here
   const home = zones[Math.min(ROWS - 1, Math.floor((cz - Z0) / ZONE)) * COLS + Math.min(COLS - 1, Math.floor((cx - X0) / ZONE))];
   home.b.push(b);
   // neighbours only need the outline, to keep trees and poles out of it
