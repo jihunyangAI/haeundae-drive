@@ -189,7 +189,10 @@ export function createTrafficKit() {
     mesh.castShadow = mesh.receiveShadow = true;
     return mesh;
   }
-  return { kinds, materials, parkedMesh };
+  // the same car in fewer triangles, for when it is far off (built when first wanted)
+  const distant = {};
+  const far = id => (distant[id] ||= buildKind(id, STANDING).whole);
+  return { kinds, materials, parkedMesh, far };
 }
 
 // The material of one moving car: its paint colour and how brightly each group of lamps glows are
@@ -242,7 +245,8 @@ export function createTrafficView(kit, scene, ground) {
   return {
     group,
     // lights: the cars have their lamps on; time: seconds, for the blinkers
-    sync(cars, { lights, time }) {
+    // near: { x, z } - where the player is: cars far from there are drawn simply and cast no shadow
+    sync(cars, { lights, time, near }) {
       const used = {}, blink = time % 0.72 < 0.36;
       for (const c of cars) {
         const i = used[c.kind.id] || 0, mesh = take(c.kind.id, i), u = mesh.material.userData.uniforms;
@@ -251,6 +255,11 @@ export function createTrafficView(kit, scene, ground) {
         mesh.position.set(c.x, (front + back) / 2 + LAYER.major, c.z);
         mesh.rotation.set(-Math.atan2(front - back, 2 * half), Math.atan2(c.ux, c.uz), 0);
         mesh.visible = true;
+        if (near) {
+          const away = Math.hypot(c.x - near.x, c.z - near.z), simple = away > (mesh.userData.simple ? 85 : 100);
+          if (simple !== !!mesh.userData.simple) { mesh.userData.simple = simple; mesh.geometry = simple ? kit.far(c.kind.id) : kit.kinds[c.kind.id].whole; }
+          mesh.castShadow = away < 60;
+        }
         u.uPaint.value.setHex(paintOf(c.kind.id, c.tint));
         u.uLamps.value.set(lights ? 5 : 0, c.braking ? 12 : lights ? 3 : 0, blink && c.signal === 'L' ? 12 : 0, blink && c.signal === 'R' ? 12 : 0);
       }

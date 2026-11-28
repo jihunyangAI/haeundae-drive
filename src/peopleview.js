@@ -127,7 +127,10 @@ export function createPeopleView(scene, ground, dir) {
         // A figure is a skeleton of some forty bones, all of which the renderer goes through every frame
         // whether it is in the picture or not. Those out of sight are taken off the scene meanwhile.
         // (those close by stay, in sight or not: they are what the car's mirrors show)
-        const inView = frustum.intersectsSphere(sphere.set(f.root.position, 2.4)) || f.root.position.distanceToSquared(camera.position) < 40 * 40;
+        // (nor those a long way off: a figure is a couple of thousand triangles and its own draw, for a few
+        // dots on the screen - they come and go a little further out once shown, so as not to flicker)
+        const away = f.root.position.distanceToSquared(camera.position), reach = f.shown ? 135 : 120;
+        const inView = away < reach * reach && frustum.intersectsSphere(sphere.set(f.root.position, 2.4)) || away < 40 * 40;
         if (inView !== f.shown) { f.shown = inView; if (inView) group.add(f.root); else group.remove(f.root); }
         if (!inView) continue;
         f.root.rotation.y = Math.atan2(p.ux, p.uz);

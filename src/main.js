@@ -86,7 +86,7 @@ function updateTraffic(dt) {
   traffic.step(Math.min(dt, 0.1), { focus: car, want, player, hidden: outOfSight, near: trafficFilled ? 90 : 35, people: people.people });
   if (traffic.cars.length >= want * 0.8) trafficFilled = true;
   for (const e of traffic.events.splice(0)) if (e.type === 'honk') sound.honk(Math.max(0, 1 - Math.hypot(e.x - car.x, e.z - car.z) / 60));
-  trafficView.sync(traffic.cars, { lights: atmosphere.wantsLights, time: traffic.time });
+  trafficView.sync(traffic.cars, { lights: atmosphere.wantsLights, time: traffic.time, near: car });
 }
 // everything the player's car can run into: the fixed world and the other cars
 // what the player's car can run into, at the height it is at
