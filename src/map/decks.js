@@ -7,6 +7,13 @@ import { EDGE } from './data.js';
 // A deck is { kind: 'bridge' | 'lid', road, pts: [[x, z]], h: [height], s: [distance along], half }.
 
 const SLAB = 0.8, PARAPET = 0.95, RIM = 0.3;
+// The last few metres of a deck that comes down to the ground have no parapet: there it meets a junction,
+// and cars turning in and out of it sweep over the corner where the parapet's end would stand.
+const LANDING = 7;
+const atLanding = (deck, f, a, b) => {
+  const mx = (a.x + b.x) / 2, mz = (a.z + b.z) / 2;
+  return (deck.landed[0] && Math.hypot(mx - f[0].x, mz - f[0].z) < LANDING) || (deck.landed[1] && Math.hypot(mx - f.at(-1).x, mz - f.at(-1).z) < LANDING);
+};
 const BARRIER = new THREE.Color(0xd9a520), CONCRETE = new THREE.Color(0x9c9fa1), SOFFIT = new THREE.Color(0x6c7074), PAVED = new THREE.Color(0xa9a69d), TILE = new THREE.Color(0xb9bcb4);
 let materials = null;
 const kit = () => (materials ||= {
@@ -52,7 +59,7 @@ export function buildStructures(map, zone, clearOf) {
         quad(at(a, -half, a.h - SLAB), at(a, half, a.h - SLAB), at(b, half, b.h - SLAB), at(b, -half, b.h - SLAB), SOFFIT);         // underside
         for (const side of [-1, 1]) {
           const out = side * half, inn = side * (half - RIM), m = at({ x: (a.x + b.x) / 2, z: (a.z + b.z) / 2, rx: a.rx, rz: a.rz }, side * (half + 0.4), 0);
-          if (joins(map, deck, m[0], m[2], (a.h + b.h) / 2)) continue;         // open towards the deck alongside
+          if (joins(map, deck, m[0], m[2], (a.h + b.h) / 2) || atLanding(deck, f, a, b)) continue;         // open towards the deck alongside, and at the end where it comes down to a junction
           quad(at(a, out, a.h - SLAB), at(b, out, b.h - SLAB), at(b, out, b.h + PARAPET), at(a, out, a.h + PARAPET), CONCRETE);    // outer face, slab and parapet in one
           quad(at(a, inn, a.h), at(b, inn, b.h), at(b, inn, b.h + PARAPET), at(a, inn, a.h + PARAPET), CONCRETE);
           quad(at(a, inn, a.h + PARAPET), at(b, inn, b.h + PARAPET), at(b, out, b.h + PARAPET), at(a, out, a.h + PARAPET), TILE);
@@ -186,7 +193,7 @@ export function solidsOf(map) {
         const a = f[k - 1], b = f[k], lo = Math.min(a.h, b.h) - 2.2, hi = Math.max(a.h, b.h) + 4;
         for (const side of [-1, 1]) {
           const mx = (a.x + b.x) / 2 + a.rx * side * (deck.half + 0.4), mz = (a.z + b.z) / 2 + a.rz * side * (deck.half + 0.4);
-          if (!joins(map, deck, mx, mz, (a.h + b.h) / 2)) strip(a, b, side * (deck.half - RIM), side * (deck.half + 0.2), lo, hi);
+          if (!joins(map, deck, mx, mz, (a.h + b.h) / 2) && !atLanding(deck, f, a, b)) strip(a, b, side * (deck.half - RIM), side * (deck.half + 0.2), lo, hi);
         }
       }
       // where the road stops in the air, the wall across it
