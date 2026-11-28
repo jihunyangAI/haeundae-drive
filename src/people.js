@@ -231,7 +231,9 @@ export function createPeople(walks, options = {}) {
             // walking ahead the same way is followed at a few paces, not waited for.
             const sameWay = p.moving && p.ux * ux + p.uz * uz > 0.5;
             const reach = !moving || sameWay ? (player.len || 4) / 2 + (moving ? 2.6 : 1.1) : 4.5 + speed * speed / 14;
-            if (along > 0 && along < reach) brake = Math.max(brake, side < 1.35 ? 2 : side < 2.3 && moving ? 1 : 0);
+            // (someone standing beside a car that is standing does not hold it: only someone it would actually touch)
+            const clear = !moving && !p.moving ? (player.kind?.wid || 1.84) / 2 + 0.3 : 1.35;
+            if (along > 0 && along < reach) brake = Math.max(brake, side < clear ? 2 : side < 2.3 && moving ? 1 : 0);
           }
         }
       }
