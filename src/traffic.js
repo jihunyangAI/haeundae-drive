@@ -367,7 +367,8 @@ export function createTraffic(graph, options = {}) {
         const car = cars[i], far = Math.hypot(car.x - focus.x, car.z - focus.z);
         const alive = far < GONE && drive(car, dt, player, people);
         // a car that has sat in a jam for a long time is taken away, out of sight if possible
-        const jammed = car.jam > 50 && (far > 70 && hidden(car.x, car.z) || car.jam > 120);
+        // (in sight too, before long: a knot of cars that will never untie itself is worse to look at than one car vanishing)
+        const jammed = car.jam > 50 && (far > 70 && hidden(car.x, car.z) || car.jam > 75);
         if (jammed) {
           options.onStuck?.(car);
           stats.stuck++;

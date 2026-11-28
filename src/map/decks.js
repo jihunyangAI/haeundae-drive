@@ -7,9 +7,9 @@ import { EDGE } from './data.js';
 // A deck is { kind: 'bridge' | 'lid', road, pts: [[x, z]], h: [height], s: [distance along], half }.
 
 const SLAB = 0.8, PARAPET = 0.95, RIM = 0.3;
-// The last few metres of a deck that comes down to the ground have no parapet: there it meets a junction,
+// The last ten metres or so of a deck that comes down to the ground have no parapet: there it meets a junction,
 // and cars turning in and out of it sweep over the corner where the parapet's end would stand.
-const LANDING = 7;
+const LANDING = 11;
 const atLanding = (deck, f, a, b) => {
   const mx = (a.x + b.x) / 2, mz = (a.z + b.z) / 2;
   return (deck.landed[0] && Math.hypot(mx - f[0].x, mz - f[0].z) < LANDING) || (deck.landed[1] && Math.hypot(mx - f.at(-1).x, mz - f.at(-1).z) < LANDING);
@@ -193,7 +193,11 @@ export function solidsOf(map) {
         const a = f[k - 1], b = f[k], lo = Math.min(a.h, b.h) - 2.2, hi = Math.max(a.h, b.h) + 4;
         for (const side of [-1, 1]) {
           const mx = (a.x + b.x) / 2 + a.rx * side * (deck.half + 0.4), mz = (a.z + b.z) / 2 + a.rz * side * (deck.half + 0.4);
-          if (!joins(map, deck, mx, mz, (a.h + b.h) / 2) && !atLanding(deck, f, a, b)) strip(a, b, side * (deck.half - RIM), side * (deck.half + 0.2), lo, hi);
+          // (nor where the parapet would stand on another deck's carriageway: two decks that overlap in plan,
+          // a ramp peeling off, are one surface to drive on there, whatever the step between them)
+          const px = (a.x + b.x) / 2 + a.rx * side * (deck.half - 0.15), pz = (a.z + b.z) / 2 + a.rz * side * (deck.half - 0.15), ph = (a.h + b.h) / 2;
+          const onAnother = map.decksAt(px, pz).some(e => e.deck !== deck && e.deck.kind === 'bridge' && Math.abs(e.h - ph) < 3.5);
+          if (!joins(map, deck, mx, mz, (a.h + b.h) / 2) && !atLanding(deck, f, a, b) && !onAnother) strip(a, b, side * (deck.half - RIM), side * (deck.half + 0.2), lo, hi);
         }
       }
       // where the road stops in the air, the wall across it

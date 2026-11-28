@@ -155,6 +155,31 @@ export async function createWorld(dir) {
 
   // ---------- collisions ----------
   const cells = new Map(), posts = [], lamps = [], unmirrored = [];
+  // The lines cars drive along at ground level (lanes and the movements across junctions), findable by place.
+  const tracks = new Map(), TRACK = 12;
+  for (const path of [...lanes.lanes, ...lanes.moves]) {
+    // (a movement counts if either end of it is on the ground: turning on to a bridge starts at ground level)
+    if (path.turn ? (path.from.level | 0) !== 0 && (path.to.level | 0) !== 0 : (path.level | 0) !== 0) continue;
+    for (let i = 1; i < path.pts.length; i++) {
+      const a = path.pts[i - 1], b = path.pts[i];
+      for (let x = Math.floor(Math.min(a[0], b[0]) / TRACK - 0.2); x <= Math.floor(Math.max(a[0], b[0]) / TRACK + 0.2); x++) {
+        for (let z = Math.floor(Math.min(a[1], b[1]) / TRACK - 0.2); z <= Math.floor(Math.max(a[1], b[1]) / TRACK + 0.2); z++) {
+          const key = x * 8192 + z;
+          if (!tracks.has(key)) tracks.set(key, []);
+          tracks.get(key).push(a[0], a[1], b[0], b[1]);
+        }
+      }
+    }
+  }
+  const inTheWay = post => {
+    const list = tracks.get(Math.floor(post.x / TRACK) * 8192 + Math.floor(post.z / TRACK)), reach = (post.r || 0.15) + 0.95;
+    if (!list) return false;
+    for (let i = 0; i < list.length; i += 4) {
+      const dx = list[i + 2] - list[i], dz = list[i + 3] - list[i + 1], l2 = dx * dx + dz * dz || 1, t = Math.min(1, Math.max(0, ((post.x - list[i]) * dx + (post.z - list[i + 1]) * dz) / l2));
+      if (Math.hypot(post.x - list[i] - dx * t, post.z - list[i + 1] - dz * t) < reach) return true;
+    }
+    return false;
+  };
   // ---------- signals ----------
   // The lamps of every signal head built so far, zone by zone. Their colours follow each junction's
   // programme; nothing changes faster than a few times a second, so that is how often they are redrawn.
@@ -281,7 +306,9 @@ export async function createWorld(dir) {
       zone.known = true;
       for (const b of d.b) addSolid(b.p);
       // poles and tree trunks: circles, kept in the same grid
-      for (const post of streets.posts) bucket(cells, cellOf(post.x), cellOf(post.z)).push({ ...post, seen: 0 });
+      // (not the ones that stand where cars drive: a pole on the inside of a corner can come within a car's
+      // half width of the line cars turn along there, and nobody could then take the corner as the traffic does)
+      for (const post of streets.posts) if (!inTheWay(post)) bucket(cells, cellOf(post.x), cellOf(post.z)).push({ ...post, seen: 0 });
       posts.push(...streets.posts);
       lamps.push(...streets.lamps);
       api.onZone?.(d.b);
