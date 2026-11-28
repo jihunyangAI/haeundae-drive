@@ -12,7 +12,9 @@ const SLAB = 0.8, PARAPET = 0.95, RIM = 0.3;
 const LANDING = 11;
 const atLanding = (deck, f, a, b) => {
   const mx = (a.x + b.x) / 2, mz = (a.z + b.z) / 2;
-  return (deck.landed[0] && Math.hypot(mx - f[0].x, mz - f[0].z) < LANDING) || (deck.landed[1] && Math.hypot(mx - f.at(-1).x, mz - f.at(-1).z) < LANDING);
+  // (and only while the deck is still near the height it lands at: a deck that loops back over its own end keeps its parapet up there)
+  const h = (a.h + b.h) / 2, near = (end, on) => on && Math.hypot(mx - end.x, mz - end.z) < LANDING && Math.abs(h - end.h) < 2.5;
+  return near(f[0], deck.landed[0]) || near(f.at(-1), deck.landed[1]);
 };
 const BARRIER = new THREE.Color(0xd9a520), CONCRETE = new THREE.Color(0x9c9fa1), SOFFIT = new THREE.Color(0x6c7074), PAVED = new THREE.Color(0xa9a69d), TILE = new THREE.Color(0xb9bcb4);
 let materials = null;

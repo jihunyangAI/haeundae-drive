@@ -342,7 +342,7 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
     // --- where the car is on its path
     let at = project(st.path, car.x, car.z, st.s - 6, st.s + 12 + v);
     // (after backing off the car may be behind where it last was by more than the stretch looked at: then the whole path is)
-    if (at.d === Infinity || at.d > 6) { const whole = project(st.path, car.x, car.z); if (whole.d < at.d) at = whole; }
+    if (at.d === Infinity || at.d > 6) { const whole = project(st.path, car.x, car.z); if (whole.d + 1 < at.d) at = whole; }
     st.off = at.d;
     st.wide = Math.max(0, st.wide - dt);                       // turning round, the car swings wider than the line drawn for it
     if (at.d > (st.wide > 0 ? 18 : 9)) {                                            // well off it (a skid, a shove): find the lane again
@@ -358,7 +358,8 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
     // nearer the path that follows than the one it is on, it counts as having passed on to it.
     if (st.path.len - st.s < 10 && at.d > 0.8) {
       const after = st.path.turn ? st.path.to : nextMove(st.path);
-      if (after && project(after, car.x, car.z, 0, 15).d + 0.4 < at.d) st.s = st.path.len;
+      // (from a lane on to a turning only with leave to cross: never past a light or a line it has to stop at)
+      if (after && (st.path.turn || st.hold === after) && project(after, car.x, car.z, 0, 15).d + 0.4 < at.d) st.s = st.path.len;
     }
     for (let n = 0; n < 8 && st.s >= st.path.len - 0.3; n++) {       // on to the next path
       if (st.path.turn) {
@@ -522,7 +523,7 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
         if (!st.goal && !st.path.turn) { const other = beside(st.path).find(o => !blocked.has(o)); if (other && blocked.has(st.path)) st.plan = [{ lane: other, via: 'change' }]; }
       }
     } else { st.stuck = 0; if (v > 4) st.fails = 0; }
-    if (v > 4 && (st.moved = (st.moved || 0) + v * dt) > 40) { st.backs = 0; st.moved = 0; st.rounds = 0; }       // (well clear of the place)
+    if (v > 4 && (st.moved = (st.moved || 0) + v * dt) > 40) { st.backs = 0; st.moved = 0; st.rounds = 0; st.waits = 0; }       // (well clear of the place)
     if (st.arriving) stopAt(Math.max(0, 18 - Math.hypot(car.x - st.from[0], car.z - st.from[1])), '도착');
 
     // cars and people on the way
@@ -720,7 +721,7 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
         return hold;
       }
       // (no room behind, or it has already backed a fair way from where this began: it waits, and the step is not counted)
-      if (st.backs === 1) st.stuckAt = [car.x, car.z];
+      if (st.backs === 1 && st.waits === 0) st.stuckAt = [car.x, car.z];
       if (behind || Math.hypot(car.x - st.stuckAt[0], car.z - st.stuckAt[1]) > 6) { st.backs--; st.waits++; st.idle = 2; if (st.waits % 4 === 0) st.backs = Math.ceil((st.backs + 1) / 3) * 3 - 1; return hold; }
       if (!behind) { release(); st.back = 5 + (st.backs % 3 === 2 ? 4.6 : 2.2); st.stuck = 0; st.shift = st.nudge = 0; say('잠시 물러납니다'); }
     }
