@@ -248,6 +248,29 @@ export function buildLaneGraph(map, net) {
   // crossing) can be large, and a curve drawn straight from the lane in to the lane out may leave the
   // carriageway altogether - across a verge, a traffic island, the shore. Where it strays far from the
   // short stretches that actually join the two, the movement follows those instead.
+  // how far a point is outside every carriageway (negative: on one)
+  const tarmac = new Map(), TILE = 40;
+  for (const r of map.roads) {
+    if (r.c !== 'drive') continue;
+    for (let i = 2; i < r.p.length; i += 2) {
+      const seg = [r.p[i - 2], r.p[i - 1], r.p[i], r.p[i + 1], r.w / 2];
+      for (let x = Math.floor(Math.min(seg[0], seg[2]) / TILE) - 1; x <= Math.floor(Math.max(seg[0], seg[2]) / TILE) + 1; x++) {
+        for (let z = Math.floor(Math.min(seg[1], seg[3]) / TILE) - 1; z <= Math.floor(Math.max(seg[1], seg[3]) / TILE) + 1; z++) {
+          const key = x * 8192 + z;
+          if (!tarmac.has(key)) tarmac.set(key, []);
+          tarmac.get(key).push(seg);
+        }
+      }
+    }
+  }
+  const offRoad = (x, z) => {
+    let best = Infinity;
+    for (const s of tarmac.get(Math.floor(x / TILE) * 8192 + Math.floor(z / TILE)) || []) {
+      const dx = s[2] - s[0], dz = s[3] - s[1], l2 = dx * dx + dz * dz || 1, t = Math.min(1, Math.max(0, ((x - s[0]) * dx + (z - s[1]) * dz) / l2));
+      best = Math.min(best, Math.hypot(x - s[0] - dx * t, z - s[1] - dz * t) - s[4]);
+    }
+    return best;
+  };
   const inside = new Map();          // junction -> [[node, node, centre line]] of the stretches inside it
   for (const l of links) {
     if (!l.internal || l.short) continue;
@@ -304,9 +327,11 @@ export function buildLaneGraph(map, net) {
   const connect = (j, arm, from, to, turn) => {
     const p0 = from.pts.at(-1), p3 = to.pts[0], d0 = unit(from.pts.at(-2), p0), d3 = unit(p3, to.pts[1]);
     let pts = curve(p0, d0, p3, d3, turn === 'S' ? 0.33 : turn === 'U' ? 0.7 : 0.42);
-    if (j.nodes.length > 1 && turn !== 'U') {
+    if (j.nodes.length > 1 && turn !== 'U' && !globalThis.__straightMoves) {
       const way = along(j, arm, to, p0, p3);
-      if (way && way.length > 2 && pts.some(p => off(p, way) > 3)) pts = way;
+      // (only where the curve really leaves the tarmac: inside a wide junction a curve straight across is
+      // as good, and paths drawn along the same few stretches get in each other's way)
+      if (way && way.length > 2 && pts.some(p => off(p, way) > 3) && pts.some(p => offRoad(p[0], p[1]) > 1.5)) pts = way;
     }
     const move = { id: moves.length, junction: j, arm, from, to, turn, pts, len: lengthOf(pts), conflicts: [], wide: [], opposed: false, yields: false, priority: 3 };
     moves.push(move);
@@ -387,7 +412,9 @@ export function buildLaneGraph(map, net) {
     // Lights where through streets cross - but not where the plan comes out as a single stage (a road
     // dividing into two carriageways, say), which would only stop traffic for nothing.
     // (and never up on the decks of the expressway, where roads only part and merge)
-    const plan = !j.knot && !j.arms.some(a => a.road.dk) && j.arms.filter(a => SIGNALISED.test(a.road.k)).length >= 3 && j.arms.filter(a => a.entries.length).length >= 2 ? programme(j) : null;
+    // (a meeting of more streets than usual at one point is still one junction, and with every arm made to
+    // stop it only locks up: it gets lights like any other. A tangle of several points stays without.)
+    const plan = (!j.knot || j.nodes.length === 1) && !j.arms.some(a => a.road.dk) && j.arms.filter(a => SIGNALISED.test(a.road.k)).length >= 3 && j.arms.filter(a => a.entries.length).length >= 2 ? programme(j) : null;
     if (plan && plan.stages.length >= 2) {
       j.control = 'signal';
       j.signal = plan;
