@@ -374,8 +374,21 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
       }
       const tg = st.target;
       if (!tg) { disengage('가까운 도로를 찾지 못해 자율주행을 끕니다'); return inp; }
+      // Close to the lane it does not make for the nearest point of it (it would arrive square across the
+      // lane, and on a narrow street never get straight): it aims at a point some way further along, so as
+      // to run in alongside, and takes the lane up once it is nearly on it and nearly facing along it.
+      const on = project(tg.lane, car.x, car.z);
+      if (on.d < 14 && tg.clear) {
+        const s2 = Math.min(tg.lane.len - 0.5, on.s + Math.max(7, on.d * 1.6)), q = pointAt(tg.lane, s2, []);
+        tg.x = q[0];
+        tg.z = q[1];
+        tg.s = s2;
+      }
       const d = Math.hypot(tg.x - car.x, tg.z - car.z);
-      if (d < 4.5) {                                          // there: on to the lane
+      const a1 = pointAt(tg.lane, Math.max(0, on.s - 1), []), b1 = pointAt(tg.lane, Math.min(tg.lane.len, on.s + 1), []);
+      const facing = Math.abs(wrap(Math.atan2(b1[0] - a1[0], b1[1] - a1[1]) - car.heading));
+      if (on.d < 2.2 && facing < 0.6 || d < 2.5 || tg.lane.len - on.s < 3 && on.d < 5) {                // there: on to the lane
+        tg.s = on.s;
         st.rejoin = false;
         st.target = null;
         st.path = tg.lane;
@@ -384,6 +397,8 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
         replan(car);
       } else {
         const bearing = wrap(Math.atan2(tg.x - car.x, tg.z - car.z) - car.heading), speedNow = Math.abs(car.vf);
+        // (a point that is beside the car and inside the circle it can turn in would be circled for ever: it backs off first)
+        if (Math.abs(bearing) > 1.3 && d < 9 && speedNow < 2.5 && st.back <= 0) { st.orbit = (st.orbit || 0) + dt; if (st.orbit > 2.5) { st.orbit = 0; st.back = 6.6; } } else st.orbit = 0;
         // (something right in front - a car, a wall it has turned towards: wait or let the escape below deal with it)
         let stop = false;
         world.query(car.x + sn * (car.spec.L / 2 + 1.2), car.z + cs * (car.spec.L / 2 + 1.2), car.spec.W / 2, (nx, nz, pen) => { if (pen > 0.1) stop = true; }, car.y);
@@ -748,6 +763,14 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
       const most = Math.max(0.12, Math.min(0.6, 2.5 / (v + 1)));
       const pull = Math.max(-most, Math.min(most, Math.atan(1.6 * side / (v + 2))));
       out.steer = Math.max(-1, Math.min(1, (wrap(towards - car.heading) - pull) / lock));
+      // Facing well away from the way the lane runs (set down across it, spun round): the rule above would
+      // have it swing to and fro across the road. It aims at a point on the line some metres ahead instead,
+      // which brings it round in one sweep.
+      if (st.askew > 1) {
+        let aim = ahead[ahead.length - 1];
+        for (const q of ahead) if (q[2] >= 9) { aim = q; break; }
+        out.steer = Math.max(-1, Math.min(1, wrap(Math.atan2(aim[0] - car.x, aim[1] - car.z) - car.heading) * 1.6));
+      }
     }
 
     // The car means to go and does not move: it is held (its own stop for people holds it while someone
@@ -865,7 +888,13 @@ export function createAutodrive({ world, traffic, people, guide, say = () => {},
     g.fillStyle = '#e8eaed';
     g.font = '600 12px system-ui, "Malgun Gothic", sans-serif';
     g.textBaseline = 'middle';
-    g.fillText(view.status, 8, h - 10);
+    g.fillText(st.rejoin ? '가까운 차로로 가는 중' : st.turn ? '차를 돌리는 중' : st.back > 5 ? '물러나는 중' : view.status, 8, h - 10);
+    // where the car is on the map, small, in a corner: a screenshot then says exactly where something went wrong
+    g.fillStyle = 'rgba(232, 234, 237, 0.55)';
+    g.font = '10px system-ui, sans-serif';
+    g.fillText(`${Math.round(car.x)}, ${Math.round(car.z)}`, 8, 12);
+    g.fillStyle = '#e8eaed';
+    g.font = '600 12px system-ui, "Malgun Gothic", sans-serif';
     g.textAlign = 'right';
     g.fillText(`${Math.round(view.set * 3.6)} km/h`, w - 8, h - 10);
     g.textAlign = 'left';
